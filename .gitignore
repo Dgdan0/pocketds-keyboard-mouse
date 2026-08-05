@@ -1,0 +1,18 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+*.apk
+*.aab
+
+# Android SDK/emulator tooling we install locally (not vendored into the repo)
+/sdk/
+/tools/
+
+# Gradle wrapper jar is fine to keep, but ignore wrapper caches if any
