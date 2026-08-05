@@ -51,11 +51,11 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
         var lastY = 0f
         var totalMoved = 0f
         var isScrolling = false
-        var lastAvgX = 0f
-        var lastAvgY = 0f
-
-        fun averageX(event: MotionEvent) = (0 until event.pointerCount).sumOf { event.getX(it).toDouble() }.toFloat() / event.pointerCount
-        fun averageY(event: MotionEvent) = (0 until event.pointerCount).sumOf { event.getY(it).toDouble() }.toFloat() / event.pointerCount
+        // Once a second finger touches down, we follow ONE finger's raw movement for
+        // the scroll delta rather than averaging both — real touch hardware doesn't
+        // always report two simultaneous points cleanly, and averaging two noisy
+        // signals was less reliable than just tracking one, per a real hardware test.
+        var trackedPointerId = -1
 
         pad.setOnTouchListener { v, event ->
             when (event.actionMasked) {
@@ -64,25 +64,31 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
                     lastY = event.y
                     totalMoved = 0f
                     isScrolling = false
+                    trackedPointerId = event.getPointerId(0)
                     true
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     isScrolling = true
-                    lastAvgX = averageX(event)
-                    lastAvgY = averageY(event)
+                    val idx = event.findPointerIndex(trackedPointerId)
+                    if (idx >= 0) {
+                        lastX = event.getX(idx)
+                        lastY = event.getY(idx)
+                    }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (isScrolling && event.pointerCount >= 2) {
-                        val avgX = averageX(event)
-                        val avgY = averageY(event)
-                        // Forwarded immediately (not batched) — the service coalesces
-                        // these into one continuous held gesture, so there's no need
-                        // to hold deltas back here to limit dispatch frequency.
-                        listener.onScroll(avgX - lastAvgX, avgY - lastAvgY)
-                        lastAvgX = avgX
-                        lastAvgY = avgY
-                    } else if (!isScrolling) {
+                    if (isScrolling) {
+                        val idx = event.findPointerIndex(trackedPointerId)
+                        if (idx >= 0) {
+                            val x = event.getX(idx)
+                            val y = event.getY(idx)
+                            // Forwarded immediately (not batched) — the service coalesces
+                            // these into one continuous held gesture.
+                            listener.onScroll(x - lastX, y - lastY)
+                            lastX = x
+                            lastY = y
+                        }
+                    } else {
                         val dx = (event.x - lastX) * SENSITIVITY
                         val dy = (event.y - lastY) * SENSITIVITY
                         totalMoved += abs(event.x - lastX) + abs(event.y - lastY)
@@ -93,14 +99,17 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
                     true
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
-                    // One finger lifted but at least one remains: fall back to single-finger
-                    // move using whichever pointer survives, without counting the multi-touch
-                    // gesture so far as tap-to-click movement.
+                    // If the finger we were tracking lifted, switch to whichever remains.
+                    if (event.getPointerId(event.actionIndex) == trackedPointerId) {
+                        val remainingIndex = if (event.actionIndex == 0) 1 else 0
+                        if (remainingIndex < event.pointerCount) {
+                            trackedPointerId = event.getPointerId(remainingIndex)
+                            lastX = event.getX(remainingIndex)
+                            lastY = event.getY(remainingIndex)
+                        }
+                    }
                     if (event.pointerCount - 1 == 1) {
                         if (isScrolling) listener.onScrollEnd()
-                        val remainingIndex = if (event.actionIndex == 0) 1 else 0
-                        lastX = event.getX(remainingIndex)
-                        lastY = event.getY(remainingIndex)
                         totalMoved = TAP_SLOP_PX
                         isScrolling = false
                     }

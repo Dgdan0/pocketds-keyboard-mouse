@@ -5,22 +5,24 @@ import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import com.pocketds.kbm.ui.KeyStyler
 import com.pocketds.kbm.ui.Theme
 
 /**
- * A QWERTY panel staggered like a real keyboard. No dedicated number row — long-press
- * a top-row key for its number (shown as a faint hint in the corner), same as how a
- * compact keyboard uses an Fn layer instead of a full row. Shift is one-shot on a
- * single tap (capitalizes the next letter, then reverts) and locks on double-tap,
- * like a normal phone keyboard's Shift/Caps Lock.
+ * An iPhone-style QWERTY layout: Shift and Backspace share the z-m row (not a
+ * separate row below), and a bottom row holds the 123/symbols toggle, Space, and
+ * Enter — no dedicated comma/period, matching how iOS keeps those on the symbols
+ * page. Long-press a top-row key for its number (shown as a faint corner hint).
+ * Shift is one-shot on tap (capitalizes the next letter, then reverts) and locks
+ * on double-tap.
  */
 class KeyboardPanel(context: Context, private val listener: Listener) : LinearLayout(context) {
 
     interface Listener {
         fun onChar(char: String)
-        fun onBackspace()
+        fun onBackspace(count: Int = 1)
         fun onEnter()
         fun onSpace()
     }
@@ -31,29 +33,62 @@ class KeyboardPanel(context: Context, private val listener: Listener) : LinearLa
             'q' to '1', 'w' to '2', 'e' to '3', 'r' to '4', 't' to '5',
             'y' to '6', 'u' to '7', 'i' to '8', 'o' to '9', 'p' to '0'
         )
+        private const val SYMBOLS_ROW_2 = "-/:;()$&@\""
+        private const val SYMBOLS_ROW_3 = ".,?!'"
     }
+
+    /** Exposed so containers like SplitHoldTrackpadContainer can exclude this key's
+     * area from their own hold-gesture detection (it already has one: repeat-delete).
+     * Reassigned whenever the page (letters/symbols) rebuilds, always pointing at
+     * whichever backspace key is currently on screen. */
+    var backspaceButton: Button? = null
+        private set
 
     private val letterButtons = mutableListOf<Button>()
     private val colors = Theme.colors(context)
+    private val pageContainer = FrameLayout(context)
 
     private var capsLocked = false
     private var shiftOnce = false
     private var lastShiftTapTime = 0L
+    private var onSymbolsPage = false
     private lateinit var shiftButton: Button
 
     init {
         orientation = VERTICAL
         setBackgroundColor(colors.background)
-
-        addView(buildTopRow(), rowParams())
-        addView(buildStaggeredRow("asdfghjkl", indentWeight = 0.3f), rowParams())
-        addView(buildStaggeredRow("zxcvbnm", indentWeight = 0.8f), rowParams())
-        addView(buildControlRow(), rowParams())
+        addView(pageContainer, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
+        showLettersPage()
     }
 
-    private fun rowParams() = LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
+    private fun rowParams() = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
 
     private fun isUpper() = capsLocked || shiftOnce
+
+    private fun showLettersPage() {
+        onSymbolsPage = false
+        pageContainer.removeAllViews()
+        letterButtons.clear()
+        val page = LinearLayout(context).apply { orientation = VERTICAL }
+        page.addView(buildTopRow(), rowParams())
+        page.addView(buildCenteredRow("asdfghjkl", sideSpacerWeight = 0.5f), rowParams())
+        page.addView(buildLettersBottomRow(), rowParams())
+        page.addView(buildControlRow(), rowParams())
+        pageContainer.addView(page)
+        applyCase()
+        KeyStyler.styleKey(context, shiftButton, colors, accent = isUpper())
+    }
+
+    private fun showSymbolsPage() {
+        onSymbolsPage = true
+        pageContainer.removeAllViews()
+        val page = LinearLayout(context).apply { orientation = VERTICAL }
+        page.addView(buildSymbolsRow("1234567890"), rowParams())
+        page.addView(buildSymbolsRow(SYMBOLS_ROW_2), rowParams())
+        page.addView(buildSymbolsThirdRow(), rowParams())
+        page.addView(buildControlRow(), rowParams())
+        pageContainer.addView(page)
+    }
 
     private fun buildTopRow(): LinearLayout {
         val row = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER }
@@ -69,14 +104,64 @@ class KeyboardPanel(context: Context, private val listener: Listener) : LinearLa
         return row
     }
 
-    private fun buildStaggeredRow(chars: String, indentWeight: Float): LinearLayout {
+    private fun buildCenteredRow(chars: String, sideSpacerWeight: Float): LinearLayout {
         val row = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER }
-        row.addView(View(context), LinearLayout.LayoutParams(0, 0, indentWeight))
+        row.addView(View(context), LinearLayout.LayoutParams(0, 0, sideSpacerWeight))
         for (c in chars) {
             val button = keyButton(c.toString()) { onLetterTap(c) }
             letterButtons.add(button)
             row.addView(button)
         }
+        row.addView(View(context), LinearLayout.LayoutParams(0, 0, sideSpacerWeight))
+        return row
+    }
+
+    private fun buildLettersBottomRow(): LinearLayout {
+        val row = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER }
+        shiftButton = keyButton("⇧", weight = 1.5f) { onShiftTap() }
+        row.addView(shiftButton)
+        for (c in "zxcvbnm") {
+            val button = keyButton(c.toString()) { onLetterTap(c) }
+            letterButtons.add(button)
+            row.addView(button)
+        }
+        val backspace = buildRepeatingBackspaceKey(context, colors, weight = 1.5f) { count -> listener.onBackspace(count) }
+        backspaceButton = backspace
+        row.addView(backspace)
+        return row
+    }
+
+    private fun buildSymbolsRow(chars: String): LinearLayout {
+        val row = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER }
+        for (c in chars) {
+            row.addView(keyButton(c.toString()) { listener.onChar(c.toString()) })
+        }
+        return row
+    }
+
+    private fun buildSymbolsThirdRow(): LinearLayout {
+        val row = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER }
+        row.addView(View(context), LinearLayout.LayoutParams(0, 0, 1f))
+        for (c in SYMBOLS_ROW_3) {
+            row.addView(keyButton(c.toString()) { listener.onChar(c.toString()) })
+        }
+        val backspace = buildRepeatingBackspaceKey(context, colors, weight = 1.5f) { count -> listener.onBackspace(count) }
+        backspaceButton = backspace
+        row.addView(backspace)
+        return row
+    }
+
+    private fun buildControlRow(): LinearLayout {
+        val row = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER }
+        val toggleLabel = if (onSymbolsPage) "ABC" else "123"
+        val toggle = keyButton(toggleLabel, weight = 1.5f) {
+            if (onSymbolsPage) showLettersPage() else showSymbolsPage()
+        }
+        val space = keyButton("Space", weight = 5.5f) { listener.onSpace() }
+        val enter = keyButton("Enter", weight = 1.7f, accent = true) { listener.onEnter() }
+        row.addView(toggle)
+        row.addView(space)
+        row.addView(enter)
         return row
     }
 
@@ -107,19 +192,6 @@ class KeyboardPanel(context: Context, private val listener: Listener) : LinearLa
     private fun applyCase() {
         val upper = isUpper()
         letterButtons.forEach { it.text = if (upper) it.text.toString().uppercase() else it.text.toString().lowercase() }
-    }
-
-    private fun buildControlRow(): LinearLayout {
-        val row = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER }
-        shiftButton = keyButton("Shift", weight = 1.3f) { onShiftTap() }
-        val space = keyButton("Space", weight = 2.4f) { listener.onSpace() }
-        val backspace = keyButton("⌫", weight = 1f) { listener.onBackspace() }
-        val enter = keyButton("Enter", weight = 1.3f, accent = true) { listener.onEnter() }
-        row.addView(shiftButton)
-        row.addView(space)
-        row.addView(backspace)
-        row.addView(enter)
-        return row
     }
 
     private fun keyButton(

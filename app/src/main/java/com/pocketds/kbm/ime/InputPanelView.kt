@@ -22,7 +22,8 @@ class InputPanelView(
     private val keyboardListener: FullKeyboardListener,
     private val trackpadListener: TrackpadPanel.Listener,
     private val onSettingsClick: (() -> Unit)? = null,
-    private val onOnePasswordClick: (() -> Unit)? = null
+    private val onOnePasswordClick: (() -> Unit)? = null,
+    private val onModeChanged: ((InputMode) -> Unit)? = null
 ) : LinearLayout(context) {
 
     private val colors = Theme.colors(context)
@@ -80,6 +81,7 @@ class InputPanelView(
         restyleTab(activeMode, selected = false)
         activeMode = mode
         restyleTab(activeMode, selected = true)
+        onModeChanged?.invoke(mode)
 
         panelContainer.removeAllViews()
         val panel: View = when (mode) {
@@ -94,9 +96,11 @@ class InputPanelView(
 
     private fun restyleTab(mode: InputMode, selected: Boolean) {
         val tab = tabs[mode] ?: return
-        val tabColors = colors
-        val bg = if (selected) tabColors.accent else tabColors.keySurface
-        tab.setTextColor(if (selected) tabColors.accentText else tabColors.mutedText)
+        // Same text color whether selected or not — only the background pill marks
+        // the active tab. Text color used to dim unselected tabs, which read as
+        // "grayed out until chosen" rather than a deliberate selection indicator.
+        tab.setTextColor(colors.keyText)
+        val bg = if (selected) colors.accent else colors.keySurface
         tab.background = GradientDrawable().apply {
             cornerRadius = 10f * resources.displayMetrics.density
             setColor(bg)

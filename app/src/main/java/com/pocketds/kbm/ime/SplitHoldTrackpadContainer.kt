@@ -1,6 +1,7 @@
 package com.pocketds.kbm.ime
 
 import android.content.Context
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -75,6 +76,7 @@ class SplitHoldTrackpadContainer(
                     handler.removeCallbacks(cooldownRunnable)
                     return true
                 }
+                if (isOnBackspace(ev.x, ev.y)) return false
                 state = State.HOLD_PENDING
                 handler.postDelayed(holdRunnable, HOLD_THRESHOLD_MS)
                 return false
@@ -124,6 +126,23 @@ class SplitHoldTrackpadContainer(
             }
         }
         return true
+    }
+
+    /** Backspace has its own hold behavior (repeat-delete) — don't let the container's
+     * hold-to-reveal-trackpad gesture steal that touch out from under it. */
+    private fun isOnBackspace(x: Float, y: Float): Boolean {
+        val backspace = keyboardPanel.backspaceButton ?: return false
+        val containerLoc = IntArray(2)
+        val backspaceLoc = IntArray(2)
+        getLocationOnScreen(containerLoc)
+        backspace.getLocationOnScreen(backspaceLoc)
+        val rect = Rect(
+            backspaceLoc[0] - containerLoc[0],
+            backspaceLoc[1] - containerLoc[1],
+            backspaceLoc[0] - containerLoc[0] + backspace.width,
+            backspaceLoc[1] - containerLoc[1] + backspace.height
+        )
+        return rect.contains(x.toInt(), y.toInt())
     }
 
     private fun enterTrackpadMode() {

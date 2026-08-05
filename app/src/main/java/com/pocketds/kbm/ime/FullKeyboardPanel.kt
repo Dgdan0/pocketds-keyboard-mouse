@@ -97,7 +97,7 @@ class FullKeyboardPanel(context: Context, private val listener: FullKeyboardList
             restyle(altButton, altArmed)
         }
         val space = keyButton("Space", weight = 2.5f) { listener.onSpace() }
-        val backspace = keyButton("⌫", weight = 1f) { listener.onBackspace() }
+        val backspace = buildRepeatingBackspaceKey(context, colors, weight = 1f) { count -> listener.onBackspace(count) }
         val enter = keyButton("Enter", weight = 1.3f, accent = true) { listener.onEnter() }
         row.addView(ctrlButton)
         row.addView(altButton)

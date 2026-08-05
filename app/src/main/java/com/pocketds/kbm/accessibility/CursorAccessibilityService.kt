@@ -83,7 +83,15 @@ class CursorAccessibilityService : AccessibilityService() {
             y = cursorY.toInt()
         }
 
+        cursorView.visibility = View.GONE
         windowManager.addView(cursorView, cursorParams)
+    }
+
+    /** Only meaningful while a cursor-driving mode (Trackpad/Nub/Split) is active —
+     * hidden the rest of the time so it doesn't sit on screen during plain typing. */
+    fun setCursorVisible(visible: Boolean) {
+        if (!::cursorView.isInitialized) return
+        cursorView.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
     fun moveCursorBy(dx: Float, dy: Float) {

@@ -14,6 +14,7 @@ import android.view.Display
 import android.view.KeyEvent
 import com.pocketds.kbm.MainActivity
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
+import com.pocketds.kbm.layout.InputMode
 import com.pocketds.kbm.settings.ScrollSettings
 
 /**
@@ -64,8 +65,16 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         bottomPresentation = BottomScreenPresentation(
             this, display, this, this,
             onSettingsClick = { openSettings() },
-            onOnePasswordClick = { launchOnePassword() }
+            onOnePasswordClick = { launchOnePassword() },
+            onModeChanged = { mode -> updateCursorVisibility(mode) }
         ).also { it.show() }
+    }
+
+    /** The cursor only makes sense while a mode that drives it is showing — otherwise
+     * it just sits on screen during plain typing with nothing to do. */
+    private fun updateCursorVisibility(mode: InputMode) {
+        val cursorCapable = mode == InputMode.TRACKPAD || mode == InputMode.NUB || mode == InputMode.SPLIT
+        CursorAccessibilityService.instance?.setCursorVisible(cursorCapable)
     }
 
     /** Settings opens on the top screen — it's read-heavy, easier to work with on the big display. */
@@ -120,8 +129,8 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         OverlayInputMethodService.instance?.currentInputConnection?.commitText(char, 1)
     }
 
-    override fun onBackspace() {
-        OverlayInputMethodService.instance?.currentInputConnection?.deleteSurroundingText(1, 0)
+    override fun onBackspace(count: Int) {
+        OverlayInputMethodService.instance?.currentInputConnection?.deleteSurroundingText(count, 0)
     }
 
     override fun onEnter() {

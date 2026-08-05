@@ -99,8 +99,10 @@ class MainActivity : AppCompatActivity() {
                 else -> ThemeSettings.Mode.SYSTEM
             }
             ThemeSettings.setMode(this, mode)
+            // setDefaultNightMode() already recreates this activity on its own when the
+            // effective mode changes — an explicit recreate() here double-fired it,
+            // which is what was showing up as a flicker.
             applyNightMode()
-            recreate()
             startService(Intent(this, BottomPanelService::class.java).setAction(BottomPanelService.ACTION_REFRESH_THEME))
         }
     }

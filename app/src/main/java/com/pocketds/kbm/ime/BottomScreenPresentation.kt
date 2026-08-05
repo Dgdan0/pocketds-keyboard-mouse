@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Bundle
 import android.view.Display
 import android.view.WindowManager
+import com.pocketds.kbm.layout.InputMode
 
 /**
  * Renders the input panel directly on the PocketDS's secondary (bottom) display via
@@ -18,7 +19,8 @@ class BottomScreenPresentation(
     private val keyboardListener: FullKeyboardListener,
     private val trackpadListener: TrackpadPanel.Listener,
     private val onSettingsClick: (() -> Unit)? = null,
-    private val onOnePasswordClick: (() -> Unit)? = null
+    private val onOnePasswordClick: (() -> Unit)? = null,
+    private val onModeChanged: ((InputMode) -> Unit)? = null
 ) : Presentation(context, display) {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -27,6 +29,8 @@ class BottomScreenPresentation(
         // focus, so tapping it doesn't end the input session on the focused field's
         // window (on the other display).
         window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-        setContentView(InputPanelView(context, keyboardListener, trackpadListener, onSettingsClick, onOnePasswordClick))
+        setContentView(
+            InputPanelView(context, keyboardListener, trackpadListener, onSettingsClick, onOnePasswordClick, onModeChanged)
+        )
     }
 }
