@@ -2,8 +2,12 @@ package com.pocketds.kbm.ime
 
 import android.app.Presentation
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.view.Display
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import com.pocketds.kbm.layout.InputMode
 
@@ -32,5 +36,36 @@ class BottomScreenPresentation(
         setContentView(
             InputPanelView(context, keyboardListener, trackpadListener, onSettingsClick, onOnePasswordClick, onModeChanged)
         )
+        // getInsetsController()/decorView need the window actually attached, which
+        // hasn't happened yet this early in onCreate (Presentation.show() attaches it
+        // after onCreate returns) — calling this synchronously here crashes with an NPE
+        // deep in PhoneWindow. post() defers it until the view hierarchy is attached.
+        window?.decorView?.post { hideSystemBars() }
+    }
+
+    /**
+     * Best-effort attempt at hiding whatever system bar/strip Android (or Ayaneo's
+     * launcher) draws on this display — untested, since it's a guess at what was
+     * described without a screenshot to confirm against.
+     */
+    private fun hideSystemBars() {
+        val win = window ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            win.setDecorFitsSystemWindows(false)
+            win.insetsController?.apply {
+                hide(WindowInsets.Type.systemBars())
+                systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            win.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                )
+        }
     }
 }

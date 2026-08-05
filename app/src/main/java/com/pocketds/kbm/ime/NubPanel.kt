@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
 import com.pocketds.kbm.ui.Theme
 import kotlin.math.min
@@ -13,16 +14,19 @@ import kotlin.math.sqrt
 
 /**
  * An isometric "nub" like a laptop TrackPoint: push away from center to drive
- * continuous cursor movement proportional to how far you push (not how far you've
- * dragged in total); release and it snaps back. A tap without pushing is a left click.
+ * continuous cursor movement — speed ramps up non-linearly the further you push
+ * (small pushes stay slow/precise, pushing further gets disproportionately faster),
+ * not how far you've dragged in total. Releasing springs the knob back. A tap
+ * without pushing is a left click.
  */
 class NubPanel(context: Context, private val listener: CursorListener) : FrameLayout(context) {
 
     companion object {
         private const val MAX_RADIUS_DP = 20f
-        private const val TICK_MS = 16L
-        private const val MAX_SPEED_PX_PER_TICK = 18f
+        private const val TICK_MS = 12L
+        private const val MAX_SPEED_PX_PER_TICK = 34f
         private const val TAP_SLOP_PX = 10f
+        private const val SPRING_BACK_MS = 180L
     }
 
     private val colors = Theme.colors(context)
@@ -49,7 +53,11 @@ class NubPanel(context: Context, private val listener: CursorListener) : FrameLa
         override fun run() {
             val magnitude = sqrt(displacementX * displacementX + displacementY * displacementY)
             if (magnitude > 0f) {
-                val speed = min(magnitude / maxRadiusPx, 1f) * MAX_SPEED_PX_PER_TICK
+                // Quadratic ease-in: near the center stays slow/precise, but speed
+                // ramps up fast as you push toward the edge — a push near max radius
+                // is disproportionately faster than half that push, not linear.
+                val ratio = min(magnitude / maxRadiusPx, 1f)
+                val speed = ratio * ratio * MAX_SPEED_PX_PER_TICK
                 val scale = speed / magnitude
                 listener.onMove(displacementX * scale, displacementY * scale)
             }
@@ -58,19 +66,15 @@ class NubPanel(context: Context, private val listener: CursorListener) : FrameLa
     }
 
     init {
-        val ringSurface = colors.keySurface
-        val ringBorder = colors.mutedText
-        background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(ringSurface)
-            setStroke((1.5f * resources.displayMetrics.density).toInt(), ringBorder)
-        }
+        // No outer boundary ring — just the floating knob, per feedback that the
+        // circle read as visual clutter rather than a useful affordance.
         val knobSize = (maxRadiusPx * 0.9f).toInt()
         addView(knob, LayoutParams(knobSize, knobSize, android.view.Gravity.CENTER))
 
         setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    knob.animate().cancel()
                     downX = event.x
                     downY = event.y
                     totalMoved = 0f
@@ -98,8 +102,12 @@ class NubPanel(context: Context, private val listener: CursorListener) : FrameLa
                     ticking = false
                     displacementX = 0f
                     displacementY = 0f
-                    knob.translationX = 0f
-                    knob.translationY = 0f
+                    knob.animate()
+                        .translationX(0f)
+                        .translationY(0f)
+                        .setInterpolator(OvershootInterpolator())
+                        .setDuration(SPRING_BACK_MS)
+                        .start()
                     if (totalMoved < TAP_SLOP_PX) listener.onLeftClick()
                     true
                 }

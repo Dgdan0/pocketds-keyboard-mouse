@@ -1,16 +1,25 @@
 package com.pocketds.kbm.ime
 
-import android.inputmethodservice.InputMethodService
+import android.content.Intent
+import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import androidx.core.content.ContextCompat
+import android.inputmethodservice.InputMethodService
+import com.pocketds.kbm.settings.AutoShowSettings
 
 /**
- * Deliberately minimal. Its only purpose is to be the active input method so
+ * Deliberately minimal. Its main purpose is to be the active input method so
  * `currentInputConnection` becomes available whenever a text field is focused;
  * the actual bottom-screen UI lives in BottomPanelService, independent of this
  * service's onCreate/onDestroy churn (which fires on every focus change and
  * would otherwise tear down a persistent panel each time it's touched).
+ *
+ * When AutoShowSettings is enabled, onStartInputView/onFinishInputView (which
+ * only fire while THIS is the selected IME) drive the panel's show/hide, so it
+ * behaves like a real keyboard instead of a separately-managed persistent panel.
  */
 class OverlayInputMethodService : InputMethodService() {
 
@@ -32,6 +41,29 @@ class OverlayInputMethodService : InputMethodService() {
         // select text), which looks like "the screen stopped responding."
         window?.window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
         return View(this).apply { layoutParams = ViewGroup.LayoutParams(0, 0) }
+    }
+
+    override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
+        super.onStartInputView(info, restarting)
+        if (!AutoShowSettings.isEnabled(this)) return
+        val existing = BottomPanelService.instance
+        if (existing != null) {
+            existing.showPanel()
+        } else {
+            val intent = Intent(this, BottomPanelService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(this, intent)
+            } else {
+                startService(intent)
+            }
+        }
+    }
+
+    override fun onFinishInputView(finishingInput: Boolean) {
+        super.onFinishInputView(finishingInput)
+        if (AutoShowSettings.isEnabled(this)) {
+            BottomPanelService.instance?.hidePanel()
+        }
     }
 
     override fun onDestroy() {

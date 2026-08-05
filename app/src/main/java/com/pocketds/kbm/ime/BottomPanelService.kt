@@ -5,16 +5,22 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
+import android.database.ContentObserver
 import android.hardware.display.DisplayManager
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import android.view.Display
 import android.view.KeyEvent
 import com.pocketds.kbm.MainActivity
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
 import com.pocketds.kbm.layout.InputMode
+import com.pocketds.kbm.settings.AutoShowSettings
 import com.pocketds.kbm.settings.ScrollSettings
 
 /**
@@ -23,6 +29,11 @@ import com.pocketds.kbm.settings.ScrollSettings
  * active InputConnection (via OverlayInputMethodService); trackpad actions forward
  * to CursorAccessibilityService. Both are no-ops if their target isn't active yet,
  * which just means "not focused"/"accessibility not enabled" rather than a crash.
+ *
+ * When AutoShowSettings is enabled, OverlayInputMethodService drives showPanel()/
+ * hidePanel() from onStartInputView/onFinishInputView, and this service stops
+ * itself entirely if the user switches to a different keyboard — otherwise (the
+ * default) the panel just stays up persistently once started, like before.
  */
 class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listener {
 
@@ -30,6 +41,9 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
     private var secondaryDisplayId: Int? = null
 
     companion object {
+        var instance: BottomPanelService? = null
+            private set
+
         private const val CHANNEL_ID = "pocketds_bottom_panel"
         private const val NOTIFICATION_ID = 1
         private const val TAG = "PocketDS"
@@ -37,9 +51,22 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         const val ACTION_REFRESH_THEME = "com.pocketds.kbm.ACTION_REFRESH_THEME"
     }
 
+    private val defaultImeObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            if (!AutoShowSettings.isEnabled(this@BottomPanelService)) return
+            val ourIme = ComponentName(this@BottomPanelService, OverlayInputMethodService::class.java).flattenToString()
+            val current = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+            if (current != ourIme) stopSelf()
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
         startForeground(NOTIFICATION_ID, buildNotification())
+        contentResolver.registerContentObserver(
+            Settings.Secure.getUriFor(Settings.Secure.DEFAULT_INPUT_METHOD), false, defaultImeObserver
+        )
         findSecondaryDisplay()?.let {
             secondaryDisplayId = it.displayId
             showOnSecondaryDisplay(it)
@@ -54,6 +81,24 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /** Re-shows the panel if it was hidden (auto-show mode); a no-op if already
+     * showing, and safe to call even if the service just started. */
+    fun showPanel() {
+        if (bottomPresentation == null) {
+            findSecondaryDisplay()?.let {
+                secondaryDisplayId = it.displayId
+                showOnSecondaryDisplay(it)
+            }
+        }
+    }
+
+    /** Tears down the presentation without stopping the service — cheap to show
+     * again later, and leaves whatever's normally on the bottom display visible. */
+    fun hidePanel() {
+        bottomPresentation?.dismiss()
+        bottomPresentation = null
+    }
 
     private fun findSecondaryDisplay(): Display? {
         val displayManager = getSystemService(DISPLAY_SERVICE) as DisplayManager
@@ -119,8 +164,10 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
 
     override fun onDestroy() {
         super.onDestroy()
+        contentResolver.unregisterContentObserver(defaultImeObserver)
         bottomPresentation?.dismiss()
         bottomPresentation = null
+        if (instance === this) instance = null
     }
 
     // --- KeyboardPanel.Listener ---

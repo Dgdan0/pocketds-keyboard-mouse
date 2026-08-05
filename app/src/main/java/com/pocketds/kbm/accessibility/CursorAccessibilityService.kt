@@ -51,6 +51,7 @@ class CursorAccessibilityService : AccessibilityService() {
         // eating the long-press instead of triggering it.
         private const val LONG_PRESS_DURATION_MS = 650L
         private const val SCROLL_SEGMENT_DURATION_MS = 40L
+        private const val FADE_DURATION_MS = 150L
     }
 
     override fun onServiceConnected() {
@@ -88,10 +89,20 @@ class CursorAccessibilityService : AccessibilityService() {
     }
 
     /** Only meaningful while a cursor-driving mode (Trackpad/Nub/Split) is active —
-     * hidden the rest of the time so it doesn't sit on screen during plain typing. */
+     * hidden the rest of the time so it doesn't sit on screen during plain typing.
+     * Fades rather than snapping, since an instant appear/disappear read as jarring. */
     fun setCursorVisible(visible: Boolean) {
         if (!::cursorView.isInitialized) return
-        cursorView.visibility = if (visible) View.VISIBLE else View.GONE
+        cursorView.animate().cancel()
+        if (visible) {
+            cursorView.alpha = 0f
+            cursorView.visibility = View.VISIBLE
+            cursorView.animate().alpha(1f).setDuration(FADE_DURATION_MS).start()
+        } else {
+            cursorView.animate().alpha(0f).setDuration(FADE_DURATION_MS)
+                .withEndAction { cursorView.visibility = View.GONE }
+                .start()
+        }
     }
 
     fun moveCursorBy(dx: Float, dy: Float) {

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
+import android.view.ViewTreeObserver
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -11,10 +12,10 @@ import com.pocketds.kbm.ui.KeyStyler
 import com.pocketds.kbm.ui.Theme
 
 /**
- * The iPhone-style keyboard (see KeyboardPanel) with a TrackPoint-style nub spliced
- * between G and H on the home row. The nub only appears on the letters page — the
- * symbols page swaps it out for a plain centered row, same as a real trackpoint
- * keyboard doesn't reposition its nub for a secondary layer.
+ * The iPhone-style keyboard (see KeyboardPanel) with a TrackPoint-style nub sitting
+ * in the gap between G, H, and B — not in its own key slot — matching how a real
+ * laptop nub pokes up between those three keys rather than occupying a full key of
+ * its own. The nub only appears on the letters page.
  */
 class NubKeyboardPanel(
     context: Context,
@@ -30,6 +31,7 @@ class NubKeyboardPanel(
         )
         private const val SYMBOLS_ROW_2 = "-/:;()$&@\""
         private const val SYMBOLS_ROW_3 = ".,?!'"
+        private const val NUB_GAP_WEIGHT = 0.6f
     }
 
     private val letterButtons = mutableListOf<Button>()
@@ -41,6 +43,9 @@ class NubKeyboardPanel(
     private var lastShiftTapTime = 0L
     private var onSymbolsPage = false
     private lateinit var shiftButton: Button
+    private lateinit var gKeyButton: Button
+    private lateinit var hKeyButton: Button
+    private lateinit var bKeyButton: Button
 
     init {
         orientation = VERTICAL
@@ -59,12 +64,13 @@ class NubKeyboardPanel(
         letterButtons.clear()
         val page = LinearLayout(context).apply { orientation = VERTICAL }
         page.addView(buildTopRow(), rowParams())
-        page.addView(buildHomeRowWithNub(), rowParams())
+        page.addView(buildHomeRowWithGap(), rowParams())
         page.addView(buildLettersBottomRow(), rowParams())
         page.addView(buildControlRow(), rowParams())
         pageContainer.addView(page)
         applyCase()
         KeyStyler.styleKey(context, shiftButton, colors, accent = isUpper())
+        placeNub()
     }
 
     private fun showSymbolsPage() {
@@ -76,6 +82,44 @@ class NubKeyboardPanel(
         page.addView(buildSymbolsThirdRow(), rowParams())
         page.addView(buildControlRow(), rowParams())
         pageContainer.addView(page)
+    }
+
+    /** Positions the nub straddling the gap left between G/H (home row) and
+     * overlapping down toward B (row below), once actual pixel bounds are known —
+     * row heights/key widths are weight-based, so this can't be computed up front. */
+    private fun placeNub() {
+        val nubSize = (44 * resources.displayMetrics.density).toInt()
+        val nub = NubPanel(context, cursorListener)
+        pageContainer.addView(nub, FrameLayout.LayoutParams(nubSize, nubSize))
+
+        pageContainer.viewTreeObserver.addOnGlobalLayoutListener(object : ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                if (gKeyButton.width == 0 || bKeyButton.width == 0) return
+                pageContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
+
+                val containerLoc = IntArray(2)
+                val gLoc = IntArray(2)
+                val hLoc = IntArray(2)
+                val bLoc = IntArray(2)
+                pageContainer.getLocationOnScreen(containerLoc)
+                gKeyButton.getLocationOnScreen(gLoc)
+                hKeyButton.getLocationOnScreen(hLoc)
+                bKeyButton.getLocationOnScreen(bLoc)
+
+                val gRight = gLoc[0] - containerLoc[0] + gKeyButton.width
+                val hLeft = hLoc[0] - containerLoc[0]
+                val midX = (gRight + hLeft) / 2
+
+                val homeRowBottom = gLoc[1] - containerLoc[1] + gKeyButton.height
+                val bTop = bLoc[1] - containerLoc[1]
+                val midY = (homeRowBottom + bTop) / 2
+
+                val params = nub.layoutParams as FrameLayout.LayoutParams
+                params.leftMargin = midX - nubSize / 2
+                params.topMargin = midY - nubSize / 2
+                nub.layoutParams = params
+            }
+        })
     }
 
     private fun buildTopRow(): LinearLayout {
@@ -92,16 +136,22 @@ class NubKeyboardPanel(
         return row
     }
 
-    private fun buildHomeRowWithNub(): LinearLayout {
+    private fun buildHomeRowWithGap(): LinearLayout {
         val row = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER }
         row.addView(View(context), LinearLayout.LayoutParams(0, 0, 0.5f))
-        for (c in "asdfg") {
+        for (c in "asdf") {
             val button = keyButton(c.toString()) { onLetterTap(c) }
             letterButtons.add(button)
             row.addView(button)
         }
-        row.addView(NubPanel(context, cursorListener), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.4f))
-        for (c in "hjkl") {
+        gKeyButton = keyButton("g") { onLetterTap('g') }
+        letterButtons.add(gKeyButton)
+        row.addView(gKeyButton)
+        row.addView(View(context), LinearLayout.LayoutParams(0, 0, NUB_GAP_WEIGHT))
+        hKeyButton = keyButton("h") { onLetterTap('h') }
+        letterButtons.add(hKeyButton)
+        row.addView(hKeyButton)
+        for (c in "jkl") {
             val button = keyButton(c.toString()) { onLetterTap(c) }
             letterButtons.add(button)
             row.addView(button)
@@ -114,7 +164,15 @@ class NubKeyboardPanel(
         val row = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER }
         shiftButton = keyButton("⇧", weight = 1.5f) { onShiftTap() }
         row.addView(shiftButton)
-        for (c in "zxcvbnm") {
+        for (c in "zxcv") {
+            val button = keyButton(c.toString()) { onLetterTap(c) }
+            letterButtons.add(button)
+            row.addView(button)
+        }
+        bKeyButton = keyButton("b") { onLetterTap('b') }
+        letterButtons.add(bKeyButton)
+        row.addView(bKeyButton)
+        for (c in "nm") {
             val button = keyButton(c.toString()) { onLetterTap(c) }
             letterButtons.add(button)
             row.addView(button)
