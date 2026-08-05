@@ -153,6 +153,10 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         CursorAccessibilityService.instance?.scrollBy(dx * invert, dy * invert)
     }
 
+    override fun onScrollEnd() {
+        CursorAccessibilityService.instance?.endScroll()
+    }
+
     // --- FullKeyboardListener ---
 
     override fun onKeyEvent(keyCode: Int, metaState: Int) {

@@ -18,15 +18,13 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
 
     interface Listener : CursorListener {
         fun onScroll(dx: Float, dy: Float)
+        fun onScrollEnd()
     }
 
     companion object {
         private const val SENSITIVITY = 1.5f
         // Drags under this distance register as a tap-to-click instead of a move.
         private const val TAP_SLOP_PX = 12f
-        // Two-finger movement is batched and only forwarded once it clears this
-        // distance, so scroll gestures don't get dispatched dozens of times a second.
-        private const val SCROLL_BATCH_PX = 15f
     }
 
     init {
@@ -55,8 +53,6 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
         var isScrolling = false
         var lastAvgX = 0f
         var lastAvgY = 0f
-        var scrollAccumX = 0f
-        var scrollAccumY = 0f
 
         fun averageX(event: MotionEvent) = (0 until event.pointerCount).sumOf { event.getX(it).toDouble() }.toFloat() / event.pointerCount
         fun averageY(event: MotionEvent) = (0 until event.pointerCount).sumOf { event.getY(it).toDouble() }.toFloat() / event.pointerCount
@@ -74,23 +70,18 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
                     isScrolling = true
                     lastAvgX = averageX(event)
                     lastAvgY = averageY(event)
-                    scrollAccumX = 0f
-                    scrollAccumY = 0f
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (isScrolling && event.pointerCount >= 2) {
                         val avgX = averageX(event)
                         val avgY = averageY(event)
-                        scrollAccumX += avgX - lastAvgX
-                        scrollAccumY += avgY - lastAvgY
+                        // Forwarded immediately (not batched) — the service coalesces
+                        // these into one continuous held gesture, so there's no need
+                        // to hold deltas back here to limit dispatch frequency.
+                        listener.onScroll(avgX - lastAvgX, avgY - lastAvgY)
                         lastAvgX = avgX
                         lastAvgY = avgY
-                        if (abs(scrollAccumX) + abs(scrollAccumY) >= SCROLL_BATCH_PX) {
-                            listener.onScroll(scrollAccumX, scrollAccumY)
-                            scrollAccumX = 0f
-                            scrollAccumY = 0f
-                        }
                     } else if (!isScrolling) {
                         val dx = (event.x - lastX) * SENSITIVITY
                         val dy = (event.y - lastY) * SENSITIVITY
@@ -106,6 +97,7 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
                     // move using whichever pointer survives, without counting the multi-touch
                     // gesture so far as tap-to-click movement.
                     if (event.pointerCount - 1 == 1) {
+                        if (isScrolling) listener.onScrollEnd()
                         val remainingIndex = if (event.actionIndex == 0) 1 else 0
                         lastX = event.getX(remainingIndex)
                         lastY = event.getY(remainingIndex)
@@ -115,8 +107,18 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!isScrolling && totalMoved < TAP_SLOP_PX) listener.onLeftClick()
+                    if (isScrolling) {
+                        listener.onScrollEnd()
+                    } else if (totalMoved < TAP_SLOP_PX) {
+                        listener.onLeftClick()
+                    }
+                    isScrolling = false
                     v.performClick()
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    if (isScrolling) listener.onScrollEnd()
+                    isScrolling = false
                     true
                 }
                 else -> false

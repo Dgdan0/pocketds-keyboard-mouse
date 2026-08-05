@@ -4,8 +4,6 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.GradientDrawable.OVAL
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -24,16 +22,35 @@ class CursorAccessibilityService : AccessibilityService() {
     private var screenWidth = 0
     private var screenHeight = 0
 
+    // Continuous two-finger scroll gesture state. Android's gesture-continuation API
+    // requires waiting for each dispatch's completion callback before extending it
+    // further, so rapid touch-move events are coalesced into pendingScrollDx/Dy and
+    // flushed as soon as the in-flight segment finishes, instead of firing one
+    // independent discrete gesture per batch (which felt like separate disconnected
+    // flicks rather than one smooth drag).
+    private var scrollStrokeX1: GestureDescription.StrokeDescription? = null
+    private var scrollStrokeX2: GestureDescription.StrokeDescription? = null
+    private var scrollActive = false
+    private var scrollDispatchInFlight = false
+    private var pendingScrollDx = 0f
+    private var pendingScrollDy = 0f
+    private var scrollX1 = 0f
+    private var scrollX2 = 0f
+    private var scrollY = 0f
+
     companion object {
         var instance: CursorAccessibilityService? = null
             private set
 
-        private const val CURSOR_SIZE_DP = 20
+        private const val CURSOR_SIZE_DP = 26
         private const val TAP_DURATION_MS = 40L
         // Android has no native right-click gesture; a long-press is the closest
-        // system-wide equivalent (it opens context menus the same way).
-        private const val LONG_PRESS_DURATION_MS = 500L
-        private const val SCROLL_GESTURE_DURATION_MS = 80L
+        // system-wide equivalent (it opens context menus the same way). This needs
+        // real margin above ViewConfiguration's ~500ms long-press timeout, or our
+        // gesture's "up" can land right at the wire and lose the race, silently
+        // eating the long-press instead of triggering it.
+        private const val LONG_PRESS_DURATION_MS = 650L
+        private const val SCROLL_SEGMENT_DURATION_MS = 40L
     }
 
     override fun onServiceConnected() {
@@ -48,13 +65,7 @@ class CursorAccessibilityService : AccessibilityService() {
         cursorY = screenHeight / 2f
 
         val sizePx = (CURSOR_SIZE_DP * metrics.density).toInt()
-        cursorView = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = OVAL
-                setColor(0xCC00E5FF.toInt())
-                setStroke((2 * metrics.density).toInt(), 0xFFFFFFFF.toInt())
-            }
-        }
+        cursorView = CursorPointerView(this, sizePx, 0xFF2BE0CE.toInt())
 
         cursorParams = WindowManager.LayoutParams(
             sizePx,
@@ -64,9 +75,12 @@ class CursorAccessibilityService : AccessibilityService() {
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
+            // The tip of the arrow (the view's top-left) is the hotspot, so it sits
+            // exactly at (cursorX, cursorY) — that's what lets it reach true corners;
+            // a centered icon always clips its body before the center hits the edge.
             gravity = Gravity.TOP or Gravity.START
-            x = cursorX.toInt() - sizePx / 2
-            y = cursorY.toInt() - sizePx / 2
+            x = cursorX.toInt()
+            y = cursorY.toInt()
         }
 
         windowManager.addView(cursorView, cursorParams)
@@ -75,8 +89,8 @@ class CursorAccessibilityService : AccessibilityService() {
     fun moveCursorBy(dx: Float, dy: Float) {
         cursorX = clamp(cursorX + dx, 0f, screenWidth.toFloat())
         cursorY = clamp(cursorY + dy, 0f, screenHeight.toFloat())
-        cursorParams.x = cursorX.toInt() - cursorView.width / 2
-        cursorParams.y = cursorY.toInt() - cursorView.height / 2
+        cursorParams.x = cursorX.toInt()
+        cursorParams.y = cursorY.toInt()
         windowManager.updateViewLayout(cursorView, cursorParams)
     }
 
@@ -85,29 +99,90 @@ class CursorAccessibilityService : AccessibilityService() {
     fun rightClick() = tapAt(cursorX, cursorY, LONG_PRESS_DURATION_MS)
 
     /**
-     * Simulates a two-finger swipe centered on the cursor position, since that's
-     * the only scroll mechanism AccessibilityService's gesture API exposes (there's
-     * no direct mouse-wheel/AXIS_VSCROLL injection available to accessibility
-     * services). dx/dy are already sign-adjusted by the caller for the user's
-     * invert-scroll preference.
+     * Simulates a two-finger drag centered on the cursor position — the only scroll
+     * mechanism AccessibilityService's gesture API exposes (there's no direct
+     * mouse-wheel/AXIS_VSCROLL injection available to accessibility services). This
+     * is one continuous held gesture for the whole scroll session (start→move*→end),
+     * not a new touch-down per call, so it reads as a smooth drag rather than a
+     * string of disconnected flicks. dx/dy are already sign-adjusted by the caller
+     * for the user's invert-scroll preference.
      */
     fun scrollBy(dx: Float, dy: Float) {
-        val fingerOffset = 60f
-        val startY = clamp(cursorY, 0f, screenHeight.toFloat())
-        val startX1 = clamp(cursorX - fingerOffset, 0f, screenWidth.toFloat())
-        val startX2 = clamp(cursorX + fingerOffset, 0f, screenWidth.toFloat())
-        val endY = clamp(startY + dy, 0f, screenHeight.toFloat())
-        val endX1 = clamp(startX1 + dx, 0f, screenWidth.toFloat())
-        val endX2 = clamp(startX2 + dx, 0f, screenWidth.toFloat())
+        if (!scrollActive) startScroll()
+        pendingScrollDx += dx
+        pendingScrollDy += dy
+        if (!scrollDispatchInFlight) dispatchScrollSegment()
+    }
 
-        val path1 = Path().apply { moveTo(startX1, startY); lineTo(endX1, endY) }
-        val path2 = Path().apply { moveTo(startX2, startY); lineTo(endX2, endY) }
-        val duration = SCROLL_GESTURE_DURATION_MS
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path1, 0, duration))
-            .addStroke(GestureDescription.StrokeDescription(path2, 0, duration))
-            .build()
-        dispatchGesture(gesture, null, null)
+    fun endScroll() {
+        if (!scrollActive) return
+        scrollActive = false
+        if (!scrollDispatchInFlight) finishScrollGesture()
+    }
+
+    private fun startScroll() {
+        scrollActive = true
+        pendingScrollDx = 0f
+        pendingScrollDy = 0f
+        val fingerOffset = 60f
+        scrollY = clamp(cursorY, 0f, screenHeight.toFloat())
+        scrollX1 = clamp(cursorX - fingerOffset, 0f, screenWidth.toFloat())
+        scrollX2 = clamp(cursorX + fingerOffset, 0f, screenWidth.toFloat())
+        scrollStrokeX1 = GestureDescription.StrokeDescription(
+            Path().apply { moveTo(scrollX1, scrollY) }, 0, SCROLL_SEGMENT_DURATION_MS, true
+        )
+        scrollStrokeX2 = GestureDescription.StrokeDescription(
+            Path().apply { moveTo(scrollX2, scrollY) }, 0, SCROLL_SEGMENT_DURATION_MS, true
+        )
+    }
+
+    private fun dispatchScrollSegment() {
+        val stroke1 = scrollStrokeX1 ?: return
+        val stroke2 = scrollStrokeX2 ?: return
+        val dx = pendingScrollDx
+        val dy = pendingScrollDy
+        pendingScrollDx = 0f
+        pendingScrollDy = 0f
+
+        val newY = clamp(scrollY + dy, 0f, screenHeight.toFloat())
+        val newX1 = clamp(scrollX1 + dx, 0f, screenWidth.toFloat())
+        val newX2 = clamp(scrollX2 + dx, 0f, screenWidth.toFloat())
+        val path1 = Path().apply { moveTo(scrollX1, scrollY); lineTo(newX1, newY) }
+        val path2 = Path().apply { moveTo(scrollX2, scrollY); lineTo(newX2, newY) }
+        scrollX1 = newX1
+        scrollX2 = newX2
+        scrollY = newY
+
+        val nextStroke1 = stroke1.continueStroke(path1, 0, SCROLL_SEGMENT_DURATION_MS, true)
+        val nextStroke2 = stroke2.continueStroke(path2, 0, SCROLL_SEGMENT_DURATION_MS, true)
+        scrollStrokeX1 = nextStroke1
+        scrollStrokeX2 = nextStroke2
+
+        scrollDispatchInFlight = true
+        val gesture = GestureDescription.Builder().addStroke(nextStroke1).addStroke(nextStroke2).build()
+        dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                scrollDispatchInFlight = false
+                when {
+                    pendingScrollDx != 0f || pendingScrollDy != 0f -> dispatchScrollSegment()
+                    !scrollActive -> finishScrollGesture()
+                }
+            }
+
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                scrollDispatchInFlight = false
+            }
+        }, null)
+    }
+
+    private fun finishScrollGesture() {
+        val stroke1 = scrollStrokeX1 ?: return
+        val stroke2 = scrollStrokeX2 ?: return
+        scrollStrokeX1 = null
+        scrollStrokeX2 = null
+        val end1 = stroke1.continueStroke(Path().apply { moveTo(scrollX1, scrollY) }, 0, 1L, false)
+        val end2 = stroke2.continueStroke(Path().apply { moveTo(scrollX2, scrollY) }, 0, 1L, false)
+        dispatchGesture(GestureDescription.Builder().addStroke(end1).addStroke(end2).build(), null, null)
     }
 
     private fun tapAt(x: Float, y: Float, durationMs: Long) {

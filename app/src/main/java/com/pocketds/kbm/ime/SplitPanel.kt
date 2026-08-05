@@ -13,6 +13,9 @@ class SplitPanel(
     init {
         orientation = VERTICAL
         addView(TrackpadPanel(context, trackpadListener), LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
-        addView(KeyboardPanel(context, keyboardListener), LayoutParams(LayoutParams.MATCH_PARENT, 0, 3f))
+        addView(
+            SplitHoldTrackpadContainer(context, keyboardListener, trackpadListener),
+            LayoutParams(LayoutParams.MATCH_PARENT, 0, 3f)
+        )
     }
 }

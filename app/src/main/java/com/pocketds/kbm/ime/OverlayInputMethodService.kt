@@ -3,6 +3,7 @@ package com.pocketds.kbm.ime
 import android.inputmethodservice.InputMethodService
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 
 /**
  * Deliberately minimal. Its only purpose is to be the active input method so
@@ -23,8 +24,15 @@ class OverlayInputMethodService : InputMethodService() {
         instance = this
     }
 
-    override fun onCreateInputView(): View =
-        View(this).apply { layoutParams = ViewGroup.LayoutParams(0, 0) }
+    override fun onCreateInputView(): View {
+        // Android enforces a minimum IME window size regardless of our requested 0x0
+        // layout, so this placeholder still renders as a small touchable patch
+        // centered on the focused screen while a field has focus — without this flag
+        // it silently swallows any real touch that lands on it (e.g. long-press to
+        // select text), which looks like "the screen stopped responding."
+        window?.window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+        return View(this).apply { layoutParams = ViewGroup.LayoutParams(0, 0) }
+    }
 
     override fun onDestroy() {
         super.onDestroy()
