@@ -18,7 +18,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
 import com.pocketds.kbm.ime.BottomPanelService
-import com.pocketds.kbm.settings.AutoShowSettings
 import com.pocketds.kbm.settings.ScrollSettings
 import com.pocketds.kbm.settings.ThemeSettings
 
@@ -66,11 +65,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         setUpThemeRadioGroup()
-
-        findViewById<CheckBox>(R.id.checkAutoShow).apply {
-            isChecked = AutoShowSettings.isEnabled(context)
-            setOnCheckedChangeListener { _, isChecked -> AutoShowSettings.setEnabled(context, isChecked) }
-        }
 
         findViewById<Button>(R.id.btnAutofillSettings).setOnClickListener {
             startActivity(Intent(Settings.ACTION_SETTINGS))

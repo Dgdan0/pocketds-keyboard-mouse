@@ -23,7 +23,8 @@ class InputPanelView(
     private val trackpadListener: TrackpadPanel.Listener,
     private val onSettingsClick: (() -> Unit)? = null,
     private val onOnePasswordClick: (() -> Unit)? = null,
-    private val onModeChanged: ((InputMode) -> Unit)? = null
+    private val onModeChanged: ((InputMode) -> Unit)? = null,
+    private val onHideClick: (() -> Unit)? = null
 ) : LinearLayout(context) {
 
     private val colors = Theme.colors(context)
@@ -60,6 +61,7 @@ class InputPanelView(
         }
         if (onSettingsClick != null) strip.addView(iconButton("⚙") { onSettingsClick.invoke() })
         if (onOnePasswordClick != null) strip.addView(iconButton("🔑") { onOnePasswordClick.invoke() })
+        if (onHideClick != null) strip.addView(iconButton("⌄") { onHideClick.invoke() })
         return strip
     }
 

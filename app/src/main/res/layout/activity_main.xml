@@ -87,18 +87,11 @@
             android:text="Bottom-screen panel"
             android:textStyle="bold" />
 
-        <CheckBox
-            android:id="@+id/checkAutoShow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Auto-show/hide based on focus (experimental)" />
-
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="When on: the panel appears when you focus a field while PocketDS Keyboard is selected, hides when focus is lost, and stops entirely if you switch to a different keyboard. When off (default): it just stays up once started, like now."
+            android:text="Only present while PocketDS Keyboard is selected — switching to another keyboard removes it completely. It opens automatically when you focus a field, and tucks itself back down to a thin strip at the top of the bottom screen when focus is lost (tap the strip to bring it back, or the ⌄ button in the panel to tuck it away yourself)."
             android:textSize="13sp" />
 
         <TextView

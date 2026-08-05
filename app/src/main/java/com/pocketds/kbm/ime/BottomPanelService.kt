@@ -20,7 +20,6 @@ import android.view.KeyEvent
 import com.pocketds.kbm.MainActivity
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
 import com.pocketds.kbm.layout.InputMode
-import com.pocketds.kbm.settings.AutoShowSettings
 import com.pocketds.kbm.settings.ScrollSettings
 
 /**
@@ -30,15 +29,23 @@ import com.pocketds.kbm.settings.ScrollSettings
  * to CursorAccessibilityService. Both are no-ops if their target isn't active yet,
  * which just means "not focused"/"accessibility not enabled" rather than a crash.
  *
- * When AutoShowSettings is enabled, OverlayInputMethodService drives showPanel()/
- * hidePanel() from onStartInputView/onFinishInputView, and this service stops
- * itself entirely if the user switches to a different keyboard — otherwise (the
- * default) the panel just stays up persistently once started, like before.
+ * The presentation only exists at all while PocketDS Keyboard is the selected
+ * system IME (a ContentObserver on DEFAULT_INPUT_METHOD tears it down completely
+ * the moment you switch to something else, e.g. Gboard — so nothing is left
+ * covering whatever else is on that display). While it exists, it toggles between
+ * collapsed (a thin handle strip) and expanded (the full panel): expand() on field
+ * focus, collapse() on focus loss, both driven by OverlayInputMethodService.
  */
 class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listener {
 
     private var bottomPresentation: BottomScreenPresentation? = null
     private var secondaryDisplayId: Int? = null
+    private var currentMode: InputMode = InputMode.KEYBOARD
+
+    // Set when the user taps the panel's own hide button, so the *current* focus
+    // session doesn't immediately auto-expand it again (e.g. on an input restart
+    // for the same field). Cleared as soon as focus moves to a new field.
+    private var manuallyCollapsedThisSession = false
 
     companion object {
         var instance: BottomPanelService? = null
@@ -53,10 +60,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
 
     private val defaultImeObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) {
-            if (!AutoShowSettings.isEnabled(this@BottomPanelService)) return
-            val ourIme = ComponentName(this@BottomPanelService, OverlayInputMethodService::class.java).flattenToString()
-            val current = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
-            if (current != ourIme) stopSelf()
+            refreshPresentationForCurrentIme()
         }
     }
 
@@ -67,37 +71,36 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         contentResolver.registerContentObserver(
             Settings.Secure.getUriFor(Settings.Secure.DEFAULT_INPUT_METHOD), false, defaultImeObserver
         )
-        findSecondaryDisplay()?.let {
-            secondaryDisplayId = it.displayId
-            showOnSecondaryDisplay(it)
-        }
+        refreshPresentationForCurrentIme()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_REFRESH_THEME) {
-            findSecondaryDisplay()?.let { showOnSecondaryDisplay(it) }
+            val wasExpanded = bottomPresentation?.isExpanded() ?: OverlayInputMethodService.isInputViewActive
+            findSecondaryDisplay()?.let { showOnSecondaryDisplay(it, wasExpanded) }
         }
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /** Re-shows the panel if it was hidden (auto-show mode); a no-op if already
-     * showing, and safe to call even if the service just started. */
-    fun showPanel() {
-        if (bottomPresentation == null) {
-            findSecondaryDisplay()?.let {
-                secondaryDisplayId = it.displayId
-                showOnSecondaryDisplay(it)
-            }
-        }
+    /** Expands the panel to its full size — a no-op if it's already expanded, if
+     * there's no presentation at all right now (we're not the selected IME), or if
+     * the user just manually hid it during this same focus session. */
+    fun expand() {
+        if (manuallyCollapsedThisSession) return
+        bottomPresentation?.setExpanded(true)
+        updateCursorVisibility(currentMode)
     }
 
-    /** Tears down the presentation without stopping the service — cheap to show
-     * again later, and leaves whatever's normally on the bottom display visible. */
-    fun hidePanel() {
-        bottomPresentation?.dismiss()
-        bottomPresentation = null
+    /** Collapses the panel back to its thin handle strip and clears the "manually
+     * hidden" flag, since focus loss always starts a fresh session. The cursor
+     * never makes sense while collapsed — there's no trackpad/nub visible to
+     * justify it — regardless of which mode tab was active before collapsing. */
+    fun collapse() {
+        manuallyCollapsedThisSession = false
+        bottomPresentation?.setExpanded(false)
+        CursorAccessibilityService.instance?.setCursorVisible(false)
     }
 
     private fun findSecondaryDisplay(): Display? {
@@ -105,20 +108,54 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         return displayManager.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }
     }
 
-    private fun showOnSecondaryDisplay(display: Display) {
+    /** The presentation (handle strip + panel) only exists while PocketDS Keyboard
+     * is the selected system IME — switching to e.g. Gboard tears it down
+     * completely instead of just collapsing it, so nothing of ours is left
+     * covering whatever else is on that display. */
+    private fun refreshPresentationForCurrentIme() {
+        val ourIme = ComponentName(this, OverlayInputMethodService::class.java)
+        val currentRaw = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+        // ComponentName.unflattenFromString (unlike a raw string compare) correctly
+        // resolves the "pkg/.RelativeClassName" shorthand against pkg — Settings
+        // doesn't always store the fully-qualified form.
+        val current = currentRaw?.let { ComponentName.unflattenFromString(it) }
+        if (current == ourIme) {
+            if (bottomPresentation == null) {
+                findSecondaryDisplay()?.let {
+                    secondaryDisplayId = it.displayId
+                    showOnSecondaryDisplay(it, OverlayInputMethodService.isInputViewActive)
+                }
+            }
+        } else {
+            bottomPresentation?.dismiss()
+            bottomPresentation = null
+        }
+    }
+
+    private fun showOnSecondaryDisplay(display: Display, startExpanded: Boolean) {
         bottomPresentation?.dismiss()
         bottomPresentation = BottomScreenPresentation(
             this, display, this, this,
             onSettingsClick = { openSettings() },
             onOnePasswordClick = { launchOnePassword() },
-            onModeChanged = { mode -> updateCursorVisibility(mode) }
-        ).also { it.show() }
+            onModeChanged = { mode -> updateCursorVisibility(mode) },
+            onHideRequested = {
+                manuallyCollapsedThisSession = true
+                CursorAccessibilityService.instance?.setCursorVisible(false)
+            }
+        ).also {
+            it.show()
+            it.setExpanded(startExpanded)
+        }
     }
 
     /** The cursor only makes sense while a mode that drives it is showing — otherwise
      * it just sits on screen during plain typing with nothing to do. */
     private fun updateCursorVisibility(mode: InputMode) {
-        val cursorCapable = mode == InputMode.TRACKPAD || mode == InputMode.NUB || mode == InputMode.SPLIT
+        currentMode = mode
+        val presentationExpanded = bottomPresentation?.isExpanded() ?: false
+        val cursorCapable = presentationExpanded &&
+            (mode == InputMode.TRACKPAD || mode == InputMode.NUB || mode == InputMode.SPLIT)
         CursorAccessibilityService.instance?.setCursorVisible(cursorCapable)
     }
 

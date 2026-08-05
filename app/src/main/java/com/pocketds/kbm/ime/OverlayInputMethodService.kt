@@ -8,7 +8,6 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import androidx.core.content.ContextCompat
 import android.inputmethodservice.InputMethodService
-import com.pocketds.kbm.settings.AutoShowSettings
 
 /**
  * Deliberately minimal. Its main purpose is to be the active input method so
@@ -17,14 +16,22 @@ import com.pocketds.kbm.settings.AutoShowSettings
  * service's onCreate/onDestroy churn (which fires on every focus change and
  * would otherwise tear down a persistent panel each time it's touched).
  *
- * When AutoShowSettings is enabled, onStartInputView/onFinishInputView (which
- * only fire while THIS is the selected IME) drive the panel's show/hide, so it
- * behaves like a real keyboard instead of a separately-managed persistent panel.
+ * onStartInputView/onFinishInputView (which only fire while THIS is the
+ * selected IME) drive the panel's expand/collapse, so it pops up automatically
+ * on field focus and tucks itself back down to a thin handle strip when focus
+ * is lost — like a real keyboard, not a separately-managed persistent overlay.
  */
 class OverlayInputMethodService : InputMethodService() {
 
     companion object {
         var instance: OverlayInputMethodService? = null
+            private set
+
+        // Lets BottomPanelService know, at the moment it (re)creates the
+        // presentation, whether a field is already focused right now — e.g. it
+        // was just torn down and recreated by an IME switch while a field kept
+        // focus the whole time, so it should come back already expanded.
+        var isInputViewActive = false
             private set
     }
 
@@ -45,10 +52,10 @@ class OverlayInputMethodService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        if (!AutoShowSettings.isEnabled(this)) return
+        isInputViewActive = true
         val existing = BottomPanelService.instance
         if (existing != null) {
-            existing.showPanel()
+            existing.expand()
         } else {
             val intent = Intent(this, BottomPanelService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -61,9 +68,8 @@ class OverlayInputMethodService : InputMethodService() {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
-        if (AutoShowSettings.isEnabled(this)) {
-            BottomPanelService.instance?.hidePanel()
-        }
+        isInputViewActive = false
+        BottomPanelService.instance?.collapse()
     }
 
     override fun onDestroy() {
