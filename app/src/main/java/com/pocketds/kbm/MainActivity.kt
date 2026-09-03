@@ -1,11 +1,14 @@
 package com.pocketds.kbm
 
 import android.app.ActivityOptions
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.method.ScrollingMovementMethod
 import android.util.Log
 import android.view.Display
 import android.view.inputmethod.InputMethodManager
@@ -17,6 +20,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
+import com.pocketds.kbm.debug.DebugLog
 import com.pocketds.kbm.ime.BottomPanelService
 import com.pocketds.kbm.settings.ScrollSettings
 import com.pocketds.kbm.settings.ThemeSettings
@@ -72,6 +76,35 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnOpenOnePassword).setOnClickListener {
             openOnePasswordOnBottomScreen()
+        }
+
+        setUpDebugTrace()
+    }
+
+    private fun setUpDebugTrace() {
+        val trace = findViewById<TextView>(R.id.debugTrace)
+        trace.movementMethod = ScrollingMovementMethod()
+        val render = {
+            val lines = DebugLog.snapshot()
+            trace.text = if (lines.isEmpty()) "(nothing recorded yet)" else lines.joinToString("\n")
+            // Jump to the newest entry, which is what you want to see after
+            // something just went wrong.
+            trace.post {
+                val overflow = trace.layout?.height?.minus(trace.height) ?: 0
+                if (overflow > 0) trace.scrollTo(0, overflow)
+            }
+        }
+        render()
+        findViewById<Button>(R.id.btnRefreshDebug).setOnClickListener { render() }
+        findViewById<Button>(R.id.btnClearDebug).setOnClickListener {
+            DebugLog.clear()
+            render()
+        }
+        findViewById<Button>(R.id.btnCopyDebug).setOnClickListener {
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(
+                ClipData.newPlainText("PocketDS debug trace", DebugLog.snapshot().joinToString("\n"))
+            )
         }
     }
 

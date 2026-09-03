@@ -23,6 +23,12 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
 
     companion object {
         private const val SENSITIVITY = 1.5f
+        // The bottom screen (the physical trackpad surface) is smaller than the top
+        // screen scrolling actually happens on, so a given finger-travel distance
+        // needs to cover more scroll distance than it would 1:1 — otherwise it reads
+        // as sluggish compared to scrolling directly on the top screen. Roughly the
+        // ratio between the two screens' sizes, on top of the base SENSITIVITY.
+        private const val SCROLL_SENSITIVITY = 2.2f
         // Drags under this distance register as a tap-to-click instead of a move.
         private const val TAP_SLOP_PX = 12f
     }
@@ -84,7 +90,7 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
                             val y = event.getY(idx)
                             // Forwarded immediately (not batched) — the service coalesces
                             // these into one continuous held gesture.
-                            listener.onScroll(x - lastX, y - lastY)
+                            listener.onScroll((x - lastX) * SCROLL_SENSITIVITY, (y - lastY) * SCROLL_SENSITIVITY)
                             lastX = x
                             lastY = y
                         }
@@ -99,7 +105,15 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
                     true
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
-                    // If the finger we were tracking lifted, switch to whichever remains.
+                    // If the finger we were tracking lifted, switch to whichever
+                    // remains — but keep treating this as an active scroll right
+                    // through the transition. Ending the scroll here (the first of
+                    // two fingers lifting, not the last) cut the natural tail of
+                    // the swipe motion short: it read as a premature stop, and the
+                    // still-moving remaining finger fell through to the cursor-move
+                    // branch below instead, showing up as a stray cursor jump right
+                    // at the end of the gesture. Only a true final lift (ACTION_UP)
+                    // or a cancel should end it.
                     if (event.getPointerId(event.actionIndex) == trackedPointerId) {
                         val remainingIndex = if (event.actionIndex == 0) 1 else 0
                         if (remainingIndex < event.pointerCount) {
@@ -107,11 +121,6 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
                             lastX = event.getX(remainingIndex)
                             lastY = event.getY(remainingIndex)
                         }
-                    }
-                    if (event.pointerCount - 1 == 1) {
-                        if (isScrolling) listener.onScrollEnd()
-                        totalMoved = TAP_SLOP_PX
-                        isScrolling = false
                     }
                     true
                 }

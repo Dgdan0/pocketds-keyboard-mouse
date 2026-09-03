@@ -19,6 +19,7 @@ import android.view.Display
 import android.view.KeyEvent
 import com.pocketds.kbm.MainActivity
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
+import com.pocketds.kbm.debug.DebugLog
 import com.pocketds.kbm.layout.InputMode
 import com.pocketds.kbm.settings.ScrollSettings
 
@@ -41,6 +42,9 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
     private var bottomPresentation: BottomScreenPresentation? = null
     private var secondaryDisplayId: Int? = null
     private var currentMode: InputMode = InputMode.KEYBOARD
+    /** Tracked here rather than read back off the presentation, which is briefly
+     * stale while a new one is being constructed. */
+    private var panelExpanded = false
 
     // Set when the user taps the panel's own hide button, so the *current* focus
     // session doesn't immediately auto-expand it again (e.g. on an input restart
@@ -76,7 +80,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_REFRESH_THEME) {
-            val wasExpanded = bottomPresentation?.isExpanded() ?: OverlayInputMethodService.isInputViewActive
+            val wasExpanded = panelExpanded || OverlayInputMethodService.isInputViewActive
             findSecondaryDisplay()?.let { showOnSecondaryDisplay(it, wasExpanded) }
         }
         return START_STICKY
@@ -84,11 +88,31 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /** Expands the panel to its full size — a no-op if it's already expanded, if
-     * there's no presentation at all right now (we're not the selected IME), or if
-     * the user just manually hid it during this same focus session. */
-    fun expand() {
-        if (manuallyCollapsedThisSession) return
+    /**
+     * Expands the panel to its full size — a no-op if there's no presentation
+     * right now (we're not the selected IME), or if the user manually hid it
+     * during this same focus session.
+     *
+     * @param freshSession focus has genuinely moved to a field, as opposed to the
+     *   same field re-establishing its input connection. A fresh session clears
+     *   any manual-hide suppression: hiding the panel applies to the field you
+     *   hid it on, not to every field you touch afterwards.
+     */
+    fun expand(freshSession: Boolean = false) {
+        if (freshSession && manuallyCollapsedThisSession) {
+            DebugLog.log("panel", "new focus session, clearing manual-hide suppression")
+            manuallyCollapsedThisSession = false
+        }
+        if (manuallyCollapsedThisSession) {
+            DebugLog.log("panel", "expand suppressed (manually hidden this session)")
+            return
+        }
+        if (bottomPresentation == null) {
+            DebugLog.log("panel", "expand ignored, no presentation (not the selected IME?)")
+            return
+        }
+        DebugLog.log("panel", "expand -> mode=$currentMode")
+        panelExpanded = true
         bottomPresentation?.setExpanded(true)
         updateCursorVisibility(currentMode)
     }
@@ -98,7 +122,9 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
      * never makes sense while collapsed — there's no trackpad/nub visible to
      * justify it — regardless of which mode tab was active before collapsing. */
     fun collapse() {
+        DebugLog.log("panel", "collapse")
         manuallyCollapsedThisSession = false
+        panelExpanded = false
         bottomPresentation?.setExpanded(false)
         CursorAccessibilityService.instance?.setCursorVisible(false)
     }
@@ -121,18 +147,23 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         val current = currentRaw?.let { ComponentName.unflattenFromString(it) }
         if (current == ourIme) {
             if (bottomPresentation == null) {
-                findSecondaryDisplay()?.let {
-                    secondaryDisplayId = it.displayId
-                    showOnSecondaryDisplay(it, OverlayInputMethodService.isInputViewActive)
+                val display = findSecondaryDisplay()
+                if (display == null) {
+                    DebugLog.log("panel", "we're the selected IME but found no secondary display")
+                } else {
+                    secondaryDisplayId = display.displayId
+                    showOnSecondaryDisplay(display, OverlayInputMethodService.isInputViewActive)
                 }
             }
         } else {
+            DebugLog.log("panel", "another IME selected ($currentRaw), tearing down presentation")
             bottomPresentation?.dismiss()
             bottomPresentation = null
         }
     }
 
     private fun showOnSecondaryDisplay(display: Display, startExpanded: Boolean) {
+        DebugLog.log("panel", "creating presentation on display ${display.displayId}, expanded=$startExpanded")
         bottomPresentation?.dismiss()
         bottomPresentation = BottomScreenPresentation(
             this, display, this, this,
@@ -140,11 +171,31 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
             onOnePasswordClick = { launchOnePassword() },
             onModeChanged = { mode -> updateCursorVisibility(mode) },
             onHideRequested = {
+                DebugLog.log("panel", "manually hidden by user")
                 manuallyCollapsedThisSession = true
+                panelExpanded = false
                 CursorAccessibilityService.instance?.setCursorVisible(false)
+            },
+            onTemporaryCollapse = {
+                // Getting out of the way of the system IME picker, which renders
+                // beneath our window. Deliberately does NOT set the manual-hide
+                // suppression: the user wants to switch keyboards, not to keep
+                // the panel down for the rest of the focus session.
+                DebugLog.log("panel", "collapsing to reveal the IME picker")
+                panelExpanded = false
+                CursorAccessibilityService.instance?.setCursorVisible(false)
+            },
+            onExpandRequested = {
+                // Pulled back up from the handle strip. An explicit request like
+                // this also clears the manual-hide suppression — the user asking
+                // for the panel is the opposite of wanting it kept down.
+                manuallyCollapsedThisSession = false
+                panelExpanded = true
+                updateCursorVisibility(currentMode)
             }
         ).also {
             it.show()
+            panelExpanded = startExpanded
             it.setExpanded(startExpanded)
         }
     }
@@ -153,8 +204,11 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
      * it just sits on screen during plain typing with nothing to do. */
     private fun updateCursorVisibility(mode: InputMode) {
         currentMode = mode
-        val presentationExpanded = bottomPresentation?.isExpanded() ?: false
-        val cursorCapable = presentationExpanded &&
+        // Deliberately not read back off bottomPresentation: this also runs while
+        // a presentation is still being constructed (InputPanelView selects its
+        // initial mode from its own init), at which point that field still holds
+        // the previous, already-dismissed one.
+        val cursorCapable = panelExpanded &&
             (mode == InputMode.TRACKPAD || mode == InputMode.NUB || mode == InputMode.SPLIT)
         CursorAccessibilityService.instance?.setCursorVisible(cursorCapable)
     }

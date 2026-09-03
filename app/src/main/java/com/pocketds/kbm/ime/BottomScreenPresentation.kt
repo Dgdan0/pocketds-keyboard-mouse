@@ -12,6 +12,7 @@ import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
+import com.pocketds.kbm.debug.DebugLog
 import com.pocketds.kbm.layout.InputMode
 import com.pocketds.kbm.ui.Theme
 
@@ -36,7 +37,9 @@ class BottomScreenPresentation(
     private val onSettingsClick: (() -> Unit)? = null,
     private val onOnePasswordClick: (() -> Unit)? = null,
     private val onModeChanged: ((InputMode) -> Unit)? = null,
-    private val onHideRequested: (() -> Unit)? = null
+    private val onHideRequested: (() -> Unit)? = null,
+    private val onTemporaryCollapse: (() -> Unit)? = null,
+    private val onExpandRequested: (() -> Unit)? = null
 ) : Presentation(context, display) {
 
     private lateinit var handleBar: TextView
@@ -61,7 +64,11 @@ class BottomScreenPresentation(
             textSize = 13f
             setTextColor(colors.keyText)
             setBackgroundColor(colors.stripBackground)
-            setOnClickListener { setExpanded(true) }
+            setOnClickListener {
+                DebugLog.log("panel", "handle strip tapped")
+                setExpanded(true)
+                onExpandRequested?.invoke()
+            }
         }
         inputPanelView = InputPanelView(
             context, keyboardListener, trackpadListener,
@@ -69,6 +76,10 @@ class BottomScreenPresentation(
             onHideClick = {
                 setExpanded(false)
                 onHideRequested?.invoke()
+            },
+            onCollapseForPicker = {
+                setExpanded(false)
+                onTemporaryCollapse?.invoke()
             }
         )
 
@@ -102,8 +113,42 @@ class BottomScreenPresentation(
         inputPanelView.visibility = if (expanded) View.VISIBLE else View.GONE
         val win = window ?: return
         val handlePx = (HANDLE_HEIGHT_DP * context.resources.displayMetrics.density).toInt()
-        win.setGravity(Gravity.TOP)
-        win.setLayout(WindowManager.LayoutParams.MATCH_PARENT, if (expanded) WindowManager.LayoutParams.MATCH_PARENT else handlePx)
+        val params = win.attributes
+        params.gravity = Gravity.TOP
+        params.width = WindowManager.LayoutParams.MATCH_PARENT
+        params.height = if (expanded) WindowManager.LayoutParams.MATCH_PARENT else handlePx
+        win.attributes = params
+
+        val decor = win.decorView
+        if (decor.isAttachedToWindow) {
+            forceRelayout(decor, params)
+        } else {
+            // Right after show() the decor view isn't attached yet (attach happens
+            // on the next traversal), and the service calls setExpanded()
+            // immediately after show() — so for a panel that comes up already
+            // expanded, doing this synchronously would skip the relayout entirely.
+            // That's exactly the "freshly-shown Trackpad ignores touches until you
+            // switch tabs" case, so it has to be deferred rather than dropped.
+            decor.post {
+                val w = window ?: return@post
+                if (w.decorView.isAttachedToWindow) forceRelayout(w.decorView, w.attributes)
+            }
+        }
+    }
+
+    /**
+     * Setting window attributes alone updates the stored LayoutParams but on this
+     * device doesn't reliably relayout an already-shown Presentation — the
+     * system's "Requested w/h" just stays put, so the window keeps its old size
+     * and child views keep stale measurements (a panel measured while collapsed
+     * ends up with zero-height touch targets). Pushing the same params through
+     * updateViewLayout(), plus an explicit requestLayout for the children, forces
+     * it through.
+     */
+    private fun forceRelayout(decor: View, params: WindowManager.LayoutParams) {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        wm?.updateViewLayout(decor, params)
+        decor.requestLayout()
     }
 
     /**

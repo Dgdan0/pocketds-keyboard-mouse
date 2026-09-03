@@ -2,12 +2,15 @@ package com.pocketds.kbm.ime
 
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import androidx.core.content.ContextCompat
 import android.inputmethodservice.InputMethodService
+import com.pocketds.kbm.debug.DebugLog
 
 /**
  * Deliberately minimal. Its main purpose is to be the active input method so
@@ -33,11 +36,25 @@ class OverlayInputMethodService : InputMethodService() {
         // focus the whole time, so it should come back already expanded.
         var isInputViewActive = false
             private set
+
+        // Some fields/apps fire onFinishInputView followed almost immediately
+        // (~20-30ms) by a fresh onStartInputView, even though the field never
+        // really lost focus from the user's perspective — a focus-restart quirk
+        // seen on real hardware, not something the user did. Collapsing
+        // immediately on every onFinishInputView made the panel flicker shut
+        // and stay shut on these spurious blur/refocus bursts. Debouncing the
+        // collapse and cancelling it if a new onStartInputView arrives in time
+        // absorbs that without delaying a real, sustained focus loss noticeably.
+        private const val COLLAPSE_DEBOUNCE_MS = 400L
     }
+
+    private val collapseHandler = Handler(Looper.getMainLooper())
+    private var pendingCollapse: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
         instance = this
+        DebugLog.log("ime", "service created")
     }
 
     override fun onCreateInputView(): View {
@@ -53,10 +70,22 @@ class OverlayInputMethodService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         isInputViewActive = true
+        pendingCollapse?.let {
+            collapseHandler.removeCallbacks(it)
+            DebugLog.log("ime", "pending collapse cancelled")
+        }
+        pendingCollapse = null
+
+        DebugLog.log("ime", "input view started (restarting=$restarting)")
         val existing = BottomPanelService.instance
         if (existing != null) {
-            existing.expand()
+            // restarting=false means focus genuinely moved to a field, which is a
+            // new session: any "user manually hid the panel" suppression from the
+            // previous one no longer applies. restarting=true is the same field
+            // re-establishing its connection, so the suppression stands.
+            existing.expand(freshSession = !restarting)
         } else {
+            DebugLog.log("ime", "panel service not running, starting it")
             val intent = Intent(this, BottomPanelService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ContextCompat.startForegroundService(this, intent)
@@ -69,11 +98,21 @@ class OverlayInputMethodService : InputMethodService() {
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         isInputViewActive = false
-        BottomPanelService.instance?.collapse()
+        DebugLog.log("ime", "input view finished, collapse in ${COLLAPSE_DEBOUNCE_MS}ms")
+        val runnable = Runnable {
+            pendingCollapse = null
+            DebugLog.log("ime", "debounced collapse firing")
+            BottomPanelService.instance?.collapse()
+        }
+        pendingCollapse = runnable
+        collapseHandler.postDelayed(runnable, COLLAPSE_DEBOUNCE_MS)
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        DebugLog.log("ime", "service destroyed")
+        pendingCollapse?.let { collapseHandler.removeCallbacks(it) }
+        pendingCollapse = null
         if (instance === this) instance = null
     }
 }

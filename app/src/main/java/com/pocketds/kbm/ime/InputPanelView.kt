@@ -4,9 +4,11 @@ import android.content.Context
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.pocketds.kbm.debug.DebugLog
 import com.pocketds.kbm.layout.InputMode
 import com.pocketds.kbm.ui.KeyStyler
 import com.pocketds.kbm.ui.Theme
@@ -24,7 +26,8 @@ class InputPanelView(
     private val onSettingsClick: (() -> Unit)? = null,
     private val onOnePasswordClick: (() -> Unit)? = null,
     private val onModeChanged: ((InputMode) -> Unit)? = null,
-    private val onHideClick: (() -> Unit)? = null
+    private val onHideClick: (() -> Unit)? = null,
+    private val onCollapseForPicker: (() -> Unit)? = null
 ) : LinearLayout(context) {
 
     private val colors = Theme.colors(context)
@@ -61,6 +64,12 @@ class InputPanelView(
         }
         if (onSettingsClick != null) strip.addView(iconButton("⚙") { onSettingsClick.invoke() })
         if (onOnePasswordClick != null) strip.addView(iconButton("🔑") { onOnePasswordClick.invoke() })
+        // Ayaneo's own system IME-switcher button lives in a strip tied to the real
+        // input method window's bounds/insets — since ours is deliberately 0x0 and
+        // untouchable (so it doesn't block the top screen), that whole strip never
+        // receives real touches for us, even though it does for a normal-sized IME
+        // like Gboard. This is our own guaranteed-to-work equivalent.
+        strip.addView(iconButton("⌨") { showInputMethodPicker() })
         if (onHideClick != null) strip.addView(iconButton("⌄") { onHideClick.invoke() })
         return strip
     }
@@ -79,7 +88,20 @@ class InputPanelView(
         setOnClickListener { onClick() }
     }
 
+    private fun showInputMethodPicker() {
+        // The system picker dialog renders behind our own Presentation window on
+        // this display (ours sits at a higher layer), so it'd open invisibly
+        // underneath us — collapse out of the way first so it's actually visible.
+        // Deliberately not the same path as the ⌄ hide button: this is a
+        // get-out-of-the-way collapse, and shouldn't leave the panel suppressed
+        // for the rest of the focus session.
+        onCollapseForPicker?.invoke()
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showInputMethodPicker()
+    }
+
     private fun showMode(mode: InputMode) {
+        DebugLog.log("mode", "showing $mode")
         restyleTab(activeMode, selected = false)
         activeMode = mode
         restyleTab(activeMode, selected = true)
