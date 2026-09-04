@@ -50,7 +50,11 @@ arm_accessibility() {
   local current
   current="$(adbx shell settings get secure enabled_accessibility_services | tr -d '\r')"
   [[ "$current" == "null" ]] && current=""
-  if [[ ",$current," == *"$A11Y"* || ":$current:" == *":$A11Y:"* ]]; then
+  # The same service can be listed either fully-qualified
+  # (pkg/pkg.path.Class) or shorthand (pkg/.path.Class), so match on the class
+  # name rather than the exact string — comparing the whole thing appends a
+  # duplicate entry when the system wrote it in the other form.
+  if [[ "$current" == *"CursorAccessibilityService"* ]]; then
     return
   fi
   local updated

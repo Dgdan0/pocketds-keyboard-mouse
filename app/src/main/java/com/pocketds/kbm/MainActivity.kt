@@ -22,6 +22,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
 import com.pocketds.kbm.debug.DebugLog
 import com.pocketds.kbm.ime.BottomPanelService
+import com.pocketds.kbm.settings.CursorSettings
 import com.pocketds.kbm.settings.ScrollSettings
 import com.pocketds.kbm.settings.ThemeSettings
 
@@ -78,7 +79,31 @@ class MainActivity : AppCompatActivity() {
             openOnePasswordOnBottomScreen()
         }
 
+        setUpCursorOptions()
         setUpDebugTrace()
+    }
+
+    private fun setUpCursorOptions() {
+        val idleGroup = findViewById<RadioGroup>(R.id.cursorIdleGroup)
+        val idToSeconds = mapOf(
+            R.id.radioIdle5 to 5,
+            R.id.radioIdle10 to 10,
+            R.id.radioIdle15 to 15,
+            R.id.radioIdle30 to 30,
+            R.id.radioIdleNever to CursorSettings.IDLE_NEVER
+        )
+        val current = CursorSettings.idleHideSeconds(this)
+        idleGroup.check(idToSeconds.entries.firstOrNull { it.value == current }?.key ?: R.id.radioIdle10)
+        idleGroup.setOnCheckedChangeListener { _, id ->
+            idToSeconds[id]?.let { CursorSettings.setIdleHideSeconds(this, it) }
+        }
+
+        findViewById<CheckBox>(R.id.checkHideOnScreenTouch).apply {
+            isChecked = CursorSettings.hideOnScreenTouch(context)
+            setOnCheckedChangeListener { _, isChecked ->
+                CursorSettings.setHideOnScreenTouch(context, isChecked)
+            }
+        }
     }
 
     private fun setUpDebugTrace() {

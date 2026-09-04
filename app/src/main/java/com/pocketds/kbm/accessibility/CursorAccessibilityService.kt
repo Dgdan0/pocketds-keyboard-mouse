@@ -2,13 +2,19 @@ package com.pocketds.kbm.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.res.Configuration
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import com.pocketds.kbm.debug.DebugLog
+import com.pocketds.kbm.settings.CursorSettings
+import com.pocketds.kbm.settings.ThemeSettings
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -23,6 +29,26 @@ class CursorAccessibilityService : AccessibilityService() {
     private var cursorY = 0f
     private var screenWidth = 0
     private var screenHeight = 0
+
+    // --- Cursor visibility ---------------------------------------------------
+    // "Allowed" is whether a cursor-driving mode is up at all (the panel decides
+    // that); on top of it the cursor hides itself after a spell of no trackpad
+    // use, and when the user reaches up and touches the top screen directly —
+    // in both cases it's stopped being the thing they're pointing with, and a
+    // stale arrow sitting on screen just looks like a smudge.
+    private var cursorAllowed = false
+    private var cursorShown = false
+    private val idleHandler = Handler(Looper.getMainLooper())
+    private val hideOnIdle = Runnable {
+        if (cursorShown) {
+            DebugLog.log("cursor", "hiding after idle timeout")
+            setCursorShown(false)
+        }
+    }
+    // When we dispatch a gesture ourselves it generates the same accessibility
+    // events a real finger would, so real touches are told apart by "did we just
+    // dispatch something?" rather than by anything in the event itself.
+    private var lastSyntheticDispatchAt = 0L
 
     // --- Two-finger scroll ---------------------------------------------------
     //
@@ -80,6 +106,11 @@ class CursorAccessibilityService : AccessibilityService() {
         private const val SCROLL_EDGE_MARGIN_PX = 90f
         private const val SCROLL_FINGER_OFFSET_PX = 60f
         private const val FADE_DURATION_MS = 150L
+        // How long after one of our own dispatched gestures an accessibility
+        // event is still assumed to be the echo of it rather than a real finger.
+        // Generous, because a scroll dispatches continuously and each segment's
+        // events can land a little after the dispatch returns.
+        private const val SYNTHETIC_ECHO_WINDOW_MS = 500L
     }
 
     override fun onServiceConnected() {
@@ -95,7 +126,8 @@ class CursorAccessibilityService : AccessibilityService() {
         cursorY = screenHeight / 2f
 
         val sizePx = (CURSOR_SIZE_DP * metrics.density).toInt()
-        cursorView = CursorPointerView(this, sizePx, 0xFF2BE0CE.toInt())
+        val (fill, outline) = cursorColors()
+        cursorView = CursorPointerView(this, sizePx, fill, outline)
 
         cursorParams = WindowManager.LayoutParams(
             sizePx,
@@ -117,13 +149,43 @@ class CursorAccessibilityService : AccessibilityService() {
         windowManager.addView(cursorView, cursorParams)
     }
 
-    /** Only meaningful while a cursor-driving mode (Trackpad/Nub/Split) is active —
-     * hidden the rest of the time so it doesn't sit on screen during plain typing.
-     * Fades rather than snapping, since an instant appear/disappear read as jarring. */
-    fun setCursorVisible(visible: Boolean) {
-        if (!::cursorView.isInitialized) return
+    /**
+     * Whether a cursor-driving mode (Trackpad/Nub/Split) is up at all — set by
+     * the panel. While it isn't, the cursor stays hidden so it doesn't sit on
+     * screen during plain typing with nothing to do. While it is, the cursor
+     * still comes and goes on its own: see [onCursorActivity].
+     */
+    fun setCursorAllowed(allowed: Boolean) {
+        cursorAllowed = allowed
+        if (allowed) {
+            onCursorActivity()
+        } else {
+            idleHandler.removeCallbacks(hideOnIdle)
+            setCursorShown(false)
+        }
+    }
+
+    /**
+     * The trackpad was just used, so show the cursor and restart the idle
+     * countdown. Called from every interaction rather than only from movement,
+     * so the cursor doesn't time out mid-click or mid-scroll.
+     */
+    private fun onCursorActivity() {
+        if (!cursorAllowed) return
+        setCursorShown(true)
+        idleHandler.removeCallbacks(hideOnIdle)
+        val seconds = CursorSettings.idleHideSeconds(this)
+        if (seconds != CursorSettings.IDLE_NEVER) {
+            idleHandler.postDelayed(hideOnIdle, seconds * 1000L)
+        }
+    }
+
+    /** Fades rather than snapping, since an instant appear/disappear read as jarring. */
+    private fun setCursorShown(shown: Boolean) {
+        if (!::cursorView.isInitialized || cursorShown == shown) return
+        cursorShown = shown
         cursorView.animate().cancel()
-        if (visible) {
+        if (shown) {
             cursorView.alpha = 0f
             cursorView.visibility = View.VISIBLE
             cursorView.animate().alpha(1f).setDuration(FADE_DURATION_MS).start()
@@ -134,7 +196,36 @@ class CursorAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** Re-reads the theme and recolours the pointer in place. */
+    fun refreshTheme() {
+        if (!::cursorView.isInitialized) return
+        val (fill, outline) = cursorColors()
+        (cursorView as? CursorPointerView)?.setColors(fill, outline)
+    }
+
+    /**
+     * White with a black outline in light mode — the shape everyone already
+     * reads as a mouse pointer, and legible against pale app backgrounds where
+     * the accent colour washed out. Dark mode keeps the accent, which reads
+     * clearly there and makes it obvious which pointer is ours.
+     */
+    private fun cursorColors(): Pair<Int, Int> {
+        val dark = when (ThemeSettings.getMode(this)) {
+            ThemeSettings.Mode.DARK -> true
+            ThemeSettings.Mode.LIGHT -> false
+            ThemeSettings.Mode.SYSTEM ->
+                resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+                    Configuration.UI_MODE_NIGHT_YES
+        }
+        return if (dark) {
+            0xFF2BE0CE.toInt() to 0xFF000000.toInt()
+        } else {
+            0xFFFFFFFF.toInt() to 0xFF000000.toInt()
+        }
+    }
+
     fun moveCursorBy(dx: Float, dy: Float) {
+        onCursorActivity()
         cursorX = clamp(cursorX + dx, 0f, screenWidth.toFloat())
         cursorY = clamp(cursorY + dy, 0f, screenHeight.toFloat())
         cursorParams.x = cursorX.toInt()
@@ -142,9 +233,15 @@ class CursorAccessibilityService : AccessibilityService() {
         windowManager.updateViewLayout(cursorView, cursorParams)
     }
 
-    fun click() = tapAt(cursorX, cursorY, TAP_DURATION_MS)
+    fun click() {
+        onCursorActivity()
+        tapAt(cursorX, cursorY, TAP_DURATION_MS)
+    }
 
-    fun rightClick() = tapAt(cursorX, cursorY, LONG_PRESS_DURATION_MS)
+    fun rightClick() {
+        onCursorActivity()
+        tapAt(cursorX, cursorY, LONG_PRESS_DURATION_MS)
+    }
 
     /**
      * Feeds movement into the two-finger drag centred on the cursor — the only
@@ -153,6 +250,7 @@ class CursorAccessibilityService : AccessibilityService() {
      * dx/dy are already sign-adjusted by the caller for the invert-scroll setting.
      */
     fun scrollBy(dx: Float, dy: Float) {
+        onCursorActivity()
         if (!scrollSessionActive) beginScrollSession()
         pendingScrollDx += dx
         pendingScrollDy += dy
@@ -232,6 +330,7 @@ class CursorAccessibilityService : AccessibilityService() {
         )
 
         scrollDispatchInFlight = true
+        lastSyntheticDispatchAt = SystemClock.uptimeMillis()
         val accepted = dispatchGesture(
             GestureDescription.Builder().addStroke(stroke1).addStroke(stroke2).build(),
             object : GestureResultCallback() {
@@ -322,6 +421,7 @@ class CursorAccessibilityService : AccessibilityService() {
         )
 
         scrollDispatchInFlight = true
+        lastSyntheticDispatchAt = SystemClock.uptimeMillis()
         val accepted = dispatchGesture(
             GestureDescription.Builder().addStroke(nextStroke1).addStroke(nextStroke2).build(),
             object : GestureResultCallback() {
@@ -383,6 +483,7 @@ class CursorAccessibilityService : AccessibilityService() {
         if (reanchor) anchorScrollFingers()
 
         scrollDispatchInFlight = true
+        lastSyntheticDispatchAt = SystemClock.uptimeMillis()
         val accepted = dispatchGesture(
             GestureDescription.Builder().addStroke(end1).addStroke(end2).build(),
             object : GestureResultCallback() {
@@ -420,18 +521,49 @@ class CursorAccessibilityService : AccessibilityService() {
         val path = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        lastSyntheticDispatchAt = SystemClock.uptimeMillis()
         dispatchGesture(gesture, null, null)
     }
 
     private fun clamp(value: Float, minVal: Float, maxVal: Float) = max(minVal, min(maxVal, value))
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    /**
+     * Used to spot the user reaching up and touching the top screen directly, so
+     * the cursor can get out of the way — once they're touching the screen, the
+     * arrow isn't what they're pointing with any more.
+     *
+     * Android doesn't hand an accessibility service raw touches from other apps
+     * (short of touch exploration, which would change how the whole device
+     * behaves), so this reads the interaction events apps emit when something is
+     * clicked or scrolled. Our own dispatched gestures raise those too, hence the
+     * echo window: an interaction that lands well after anything we sent was a
+     * real finger. Best-effort by nature — it can be fooled by an app animating
+     * on its own — so it's a setting, and it never hides anything permanently
+     * (the next trackpad touch brings the cursor straight back).
+     */
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (!cursorShown || event == null) return
+        if (!CursorSettings.hideOnScreenTouch(this)) return
+        val interactive = when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_LONG_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_SCROLLED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> true
+            else -> false
+        }
+        if (!interactive) return
+        if (SystemClock.uptimeMillis() - lastSyntheticDispatchAt < SYNTHETIC_ECHO_WINDOW_MS) return
+        DebugLog.log("cursor", "screen touched directly, hiding cursor")
+        idleHandler.removeCallbacks(hideOnIdle)
+        setCursorShown(false)
+    }
 
     override fun onInterrupt() {}
 
     override fun onDestroy() {
         super.onDestroy()
         DebugLog.log("cursor", "accessibility service destroyed")
+        idleHandler.removeCallbacks(hideOnIdle)
         if (::windowManager.isInitialized && ::cursorView.isInitialized) {
             windowManager.removeView(cursorView)
         }

@@ -11,12 +11,17 @@ import android.view.View
  * corner — that's what lets the cursor reach every corner of the screen exactly,
  * unlike a centered circular blob whose body always clips before the hotspot does.
  */
-class CursorPointerView(context: Context, sizePx: Int, accentColor: Int) : View(context) {
+class CursorPointerView(
+    context: Context,
+    sizePx: Int,
+    fillColor: Int,
+    outlineColor: Int
+) : View(context) {
 
     private val arrowPath = Path()
-    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accentColor }
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = fillColor }
     private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF000000.toInt()
+        color = outlineColor
         style = Paint.Style.STROKE
         strokeWidth = sizePx * 0.06f
         strokeJoin = Paint.Join.ROUND
@@ -34,6 +39,14 @@ class CursorPointerView(context: Context, sizePx: Int, accentColor: Int) : View(
             lineTo(s * 0.65f, s * 0.55f)
             close()
         }
+    }
+
+    /** Repaints in new colours when the theme changes, so the cursor doesn't have
+     * to be torn out of the window manager and re-added just to recolour it. */
+    fun setColors(fillColor: Int, outlineColor: Int) {
+        fillPaint.color = fillColor
+        outlinePaint.color = outlineColor
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {

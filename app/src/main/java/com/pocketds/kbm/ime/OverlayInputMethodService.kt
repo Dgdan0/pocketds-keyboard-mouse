@@ -67,6 +67,31 @@ class OverlayInputMethodService : InputMethodService() {
         return View(this).apply { layoutParams = ViewGroup.LayoutParams(0, 0) }
     }
 
+    /**
+     * Tells the system this input method occupies no space on the screen the
+     * focused app is on.
+     *
+     * Without this, apps do the normal, correct thing for a normal keyboard:
+     * they see a non-zero IME inset and scroll/resize their content upward to
+     * keep the focused field visible above it. Our UI is on the *other* display
+     * though, so there's nothing to make room for — the field just leaps up the
+     * screen for no visible reason (very obvious in apps that keep the field
+     * pinned above the keyboard, like a chat composer).
+     *
+     * Reporting content/visible top insets equal to the window's own height is
+     * the documented way to say "my content starts at the very bottom edge",
+     * i.e. covers nothing. The empty touchable region matches FLAG_NOT_TOUCHABLE
+     * above, so touches keep falling through to the app.
+     */
+    override fun onComputeInsets(outInsets: Insets) {
+        super.onComputeInsets(outInsets)
+        val windowHeight = window?.window?.decorView?.height ?: 0
+        outInsets.contentTopInsets = windowHeight
+        outInsets.visibleTopInsets = windowHeight
+        outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_REGION
+        outInsets.touchableRegion.setEmpty()
+    }
+
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         isInputViewActive = true
@@ -85,12 +110,23 @@ class OverlayInputMethodService : InputMethodService() {
             // re-establishing its connection, so the suppression stands.
             existing.expand(freshSession = !restarting)
         } else {
+            // Nothing running on the bottom screen yet — most likely the process
+            // was started fresh just to service this focus. Bring the panel up so
+            // focusing a field never leaves a focused field with no keyboard.
             DebugLog.log("ime", "panel service not running, starting it")
             val intent = Intent(this, BottomPanelService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ContextCompat.startForegroundService(this, intent)
-            } else {
-                startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    ContextCompat.startForegroundService(this, intent)
+                } else {
+                    startService(intent)
+                }
+            } catch (e: Exception) {
+                // Android restricts starting foreground services from the
+                // background. An IME servicing a focus is normally exempt, but if
+                // it's ever refused, failing silently would look exactly like the
+                // panel being broken — so say so in the trace.
+                DebugLog.log("ime", "could not start panel service: ${e.javaClass.simpleName}: ${e.message}")
             }
         }
     }

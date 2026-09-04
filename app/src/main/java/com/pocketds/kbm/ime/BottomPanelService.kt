@@ -82,6 +82,8 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         if (intent?.action == ACTION_REFRESH_THEME) {
             val wasExpanded = panelExpanded || OverlayInputMethodService.isInputViewActive
             findSecondaryDisplay()?.let { showOnSecondaryDisplay(it, wasExpanded) }
+            // The pointer is themed too (white in light mode, accent in dark).
+            CursorAccessibilityService.instance?.refreshTheme()
         }
         return START_STICKY
     }
@@ -108,8 +110,17 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
             return
         }
         if (bottomPresentation == null) {
-            DebugLog.log("panel", "expand ignored, no presentation (not the selected IME?)")
-            return
+            // The service is alive but has nothing on the bottom screen — e.g. the
+            // display wasn't ready when we last looked, or an IME switch tore the
+            // presentation down and we've since been selected again. Focusing a
+            // field is a clear request for the keyboard, so build it now rather
+            // than leaving the user with a focused field and a blank screen.
+            DebugLog.log("panel", "no presentation yet, creating one for this focus")
+            refreshPresentationForCurrentIme()
+            if (bottomPresentation == null) {
+                DebugLog.log("panel", "still no presentation — not the selected IME, or no second display")
+                return
+            }
         }
         DebugLog.log("panel", "expand -> mode=$currentMode")
         panelExpanded = true
@@ -126,7 +137,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         manuallyCollapsedThisSession = false
         panelExpanded = false
         bottomPresentation?.setExpanded(false)
-        CursorAccessibilityService.instance?.setCursorVisible(false)
+        CursorAccessibilityService.instance?.setCursorAllowed(false)
     }
 
     private fun findSecondaryDisplay(): Display? {
@@ -174,7 +185,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
                 DebugLog.log("panel", "manually hidden by user")
                 manuallyCollapsedThisSession = true
                 panelExpanded = false
-                CursorAccessibilityService.instance?.setCursorVisible(false)
+                CursorAccessibilityService.instance?.setCursorAllowed(false)
             },
             onTemporaryCollapse = {
                 // Getting out of the way of the system IME picker, which renders
@@ -183,7 +194,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
                 // the panel down for the rest of the focus session.
                 DebugLog.log("panel", "collapsing to reveal the IME picker")
                 panelExpanded = false
-                CursorAccessibilityService.instance?.setCursorVisible(false)
+                CursorAccessibilityService.instance?.setCursorAllowed(false)
             },
             onExpandRequested = {
                 // Pulled back up from the handle strip. An explicit request like
@@ -210,7 +221,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         // the previous, already-dismissed one.
         val cursorCapable = panelExpanded &&
             (mode == InputMode.TRACKPAD || mode == InputMode.NUB || mode == InputMode.SPLIT)
-        CursorAccessibilityService.instance?.setCursorVisible(cursorCapable)
+        CursorAccessibilityService.instance?.setCursorAllowed(cursorCapable)
     }
 
     /** Settings opens on the top screen — it's read-heavy, easier to work with on the big display. */

@@ -112,6 +112,78 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="28dp"
+            android:text="Mouse pointer"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Hide the pointer after this long without using the trackpad. It reappears the moment you touch the trackpad again."
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/cursorIdleGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/radioIdle5"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="5s" />
+
+            <RadioButton
+                android:id="@+id/radioIdle10"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="10s" />
+
+            <RadioButton
+                android:id="@+id/radioIdle15"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="15s" />
+
+            <RadioButton
+                android:id="@+id/radioIdle30"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="30s" />
+
+            <RadioButton
+                android:id="@+id/radioIdleNever"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Never" />
+
+        </RadioGroup>
+
+        <CheckBox
+            android:id="@+id/checkHideOnScreenTouch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Hide the pointer when I touch the top screen" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Best-effort: Android doesn't report other apps' touches directly, so this infers them from what apps report being clicked or scrolled. An app animating on its own can occasionally trigger it — the pointer always comes straight back on the next trackpad touch."
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
             android:text="Debug trace"
             android:textStyle="bold" />
 
