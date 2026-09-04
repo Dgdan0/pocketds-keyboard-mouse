@@ -19,7 +19,14 @@ IME="$PKG/.ime.OverlayInputMethodService"
 A11Y="$PKG/.accessibility.CursorAccessibilityService"
 # The vendor's screencap wants the display's uniqueId, not the 0/2 index the
 # rest of the framework uses. Top screen is the default, so it needs no flag.
-BOTTOM_DISPLAY_ID=4630946708815090308
+# Looked up rather than hardcoded: the bottom display gets torn down and
+# recreated (its framework id has been seen going 2 -> 4), and a stale id
+# silently captures the wrong buffer, which looks like "our window isn't
+# drawing". port=132 is the bottom panel's fixed hardware address.
+bottom_display_id() {
+  adbx shell dumpsys SurfaceFlinger --display-id \
+    | awk '/port=132/ {print $2; exit}'
+}
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # The wireless-debugging port is reassigned every time the service restarts, so
@@ -97,8 +104,13 @@ case "${1:-deploy}" in
   shot)
     mkdir -p "$ROOT/shots"
     adbx exec-out screencap -p > "$ROOT/shots/top.png"
-    adbx exec-out screencap -p -d "$BOTTOM_DISPLAY_ID" > "$ROOT/shots/bottom.png"
-    echo "wrote shots/top.png and shots/bottom.png"
+    bottom="$(bottom_display_id)"
+    if [[ -z "$bottom" ]]; then
+      echo "could not resolve the bottom display id; only wrote top.png" >&2
+    else
+      adbx exec-out screencap -p -d "$bottom" > "$ROOT/shots/bottom.png"
+    fi
+    echo "wrote shots/top.png${bottom:+ and shots/bottom.png (display $bottom)}"
     ;;
 
   state)

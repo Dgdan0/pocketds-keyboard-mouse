@@ -34,4 +34,8 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    // Spring/fling physics for the floating bubble. Hand-rolled easing on a
+    // drag-and-release interaction never lands on a good feel; this exposes
+    // damping and stiffness directly, which is what actually needs tuning.
+    implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
 }

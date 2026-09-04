@@ -76,6 +76,50 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         }
     }
 
+    /**
+     * The bottom display gets destroyed and recreated under us — its id has been
+     * seen going 2 -> 4 — when apps are launched or moved between screens.
+     *
+     * A Presentation is bound to the Display it was built with, so when that
+     * happens the old one becomes a zombie: it still reports itself as visible,
+     * drawn and top of z-order, while the physical screen shows something else
+     * entirely. Every expand() then "succeeds" against a window nobody can see,
+     * which is exactly what "the keyboard stopped opening" looked like. The
+     * system does sometimes dismiss it for us, but not reliably, so the display
+     * lifecycle has to be watched directly.
+     */
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {
+            if (displayId == Display.DEFAULT_DISPLAY) return
+            DebugLog.log("panel", "display $displayId added")
+            rebuildForDisplayChange()
+        }
+
+        override fun onDisplayRemoved(displayId: Int) {
+            if (displayId != secondaryDisplayId) return
+            DebugLog.log("panel", "our display ($displayId) was removed")
+            rebuildForDisplayChange()
+        }
+
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId != secondaryDisplayId) return
+            DebugLog.log("panel", "our display ($displayId) was reconfigured")
+            rebuildForDisplayChange()
+        }
+    }
+
+    /** Rebuilds the presentation against whatever the bottom display is now,
+     * rate-limited so a display that keeps churning can't spin us. */
+    private fun rebuildForDisplayChange() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastAutoRecreateAt < 700L) return
+        lastAutoRecreateAt = now
+        val wasExpanded = panelExpanded
+        dismissPresentation()
+        refreshPresentationForCurrentIme()
+        if (wasExpanded) bottomPresentation?.setExpanded(true)
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -83,6 +127,8 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         contentResolver.registerContentObserver(
             Settings.Secure.getUriFor(Settings.Secure.DEFAULT_INPUT_METHOD), false, defaultImeObserver
         )
+        (getSystemService(DISPLAY_SERVICE) as DisplayManager)
+            .registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
         refreshPresentationForCurrentIme()
     }
 
@@ -117,9 +163,21 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
             DebugLog.log("panel", "expand suppressed (manually hidden this session)")
             return
         }
-        // isShowing as well as null: a presentation the system dismissed without
-        // us hearing about it would otherwise swallow setExpanded() silently.
-        if (bottomPresentation?.isShowing != true) {
+        // Three ways a presentation can be useless while still being non-null:
+        // dismissed without us hearing about it, or bound to a display that has
+        // since been replaced (a zombie that reports itself visible and drawn
+        // while the physical screen shows something else). Either way it would
+        // swallow setExpanded() silently, so check rather than assume.
+        val liveDisplayId = findSecondaryDisplay()?.displayId
+        val onCurrentDisplay = bottomPresentation?.display?.displayId == liveDisplayId
+        if (bottomPresentation?.isShowing != true || !onCurrentDisplay) {
+            if (bottomPresentation != null && !onCurrentDisplay) {
+                DebugLog.log(
+                    "panel",
+                    "presentation is on a stale display " +
+                        "(${bottomPresentation?.display?.displayId} vs $liveDisplayId), rebuilding"
+                )
+            }
             // Nothing usable on the bottom screen — the display wasn't ready when
             // we last looked, an IME switch tore it down, or it was dismissed by a
             // display reconfiguration. Focusing a field is a clear request for the
@@ -317,6 +375,8 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
     override fun onDestroy() {
         super.onDestroy()
         contentResolver.unregisterContentObserver(defaultImeObserver)
+        (getSystemService(DISPLAY_SERVICE) as DisplayManager)
+            .unregisterDisplayListener(displayListener)
         dismissPresentation()
         if (instance === this) instance = null
     }
