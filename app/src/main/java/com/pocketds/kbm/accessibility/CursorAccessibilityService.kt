@@ -383,14 +383,27 @@ class CursorAccessibilityService : AccessibilityService() {
         val startX1 = scrollX1
         val startX2 = scrollX2
         val startY = scrollY
-        val endX1 = clamp(startX1 + dx, minX, maxX)
-        val endX2 = clamp(startX2 + dx, minX, maxX)
+
+        // The two fingers have to travel as a rigid pair. Clamping each one
+        // independently is what broke horizontal scrolling: on a sideways swipe
+        // the leading finger hits the screen edge first, and if the trailing one
+        // keeps going they converge — which is a pinch, not a pan, so apps
+        // either zoomed or ignored it. (Vertical was unaffected: both fingers
+        // share a Y, so they always clamped identically and stayed rigid.)
+        // Taking the smaller of the two allowed distances keeps the spacing
+        // fixed, and the shortfall triggers a re-plant like any other.
+        val allowedDx = smallerTravel(
+            clamp(startX1 + dx, minX, maxX) - startX1,
+            clamp(startX2 + dx, minX, maxX) - startX2
+        )
+        val endX1 = startX1 + allowedDx
+        val endX2 = startX2 + allowedDx
         val endY = clamp(startY + dy, minY, maxY)
 
         // Whatever the clamp ate is travel this gesture can't deliver: hand it
         // back to pending and re-plant the fingers, so a long swipe carries on
         // scrolling instead of quietly dying at the edge of the screen.
-        val unusedDx = dx - (endX1 - startX1)
+        val unusedDx = dx - allowedDx
         val unusedDy = dy - (endY - startY)
         if (abs(unusedDx) > 0.5f || abs(unusedDy) > 0.5f) {
             pendingScrollDx += unusedDx
@@ -526,6 +539,10 @@ class CursorAccessibilityService : AccessibilityService() {
     }
 
     private fun clamp(value: Float, minVal: Float, maxVal: Float) = max(minVal, min(maxVal, value))
+
+    /** Whichever of the two distances is shorter in magnitude — both are the same
+     * sign here, being the same requested movement clamped against each edge. */
+    private fun smallerTravel(a: Float, b: Float) = if (abs(a) <= abs(b)) a else b
 
     /**
      * Used to spot the user reaching up and touching the top screen directly, so

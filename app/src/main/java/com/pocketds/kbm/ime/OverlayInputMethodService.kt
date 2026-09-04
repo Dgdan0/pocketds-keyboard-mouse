@@ -57,12 +57,29 @@ class OverlayInputMethodService : InputMethodService() {
         DebugLog.log("ime", "service created")
     }
 
+    /**
+     * Never show an on-screen keyboard window on the focused app's display.
+     *
+     * Our keyboard is on the other screen, which makes this the same situation
+     * as a hardware keyboard being attached — and this is how an IME says
+     * "I'm handling input, but I don't need any screen space for it".
+     *
+     * That gets rid of the strip along the bottom of the top screen: it was the
+     * system's IME navigation bar, which SystemUI draws whenever an input method
+     * window is showing, plus the unavoidable minimum-size placeholder window
+     * underneath it. Neither is ours to style or remove directly — but with no
+     * input view shown, there's nothing for the system to put them around.
+     *
+     * The input connection is unaffected: it comes from onStartInput, not from
+     * having a visible view, so typing still works exactly as before.
+     */
+    override fun onEvaluateInputViewShown(): Boolean = false
+
     override fun onCreateInputView(): View {
-        // Android enforces a minimum IME window size regardless of our requested 0x0
-        // layout, so this placeholder still renders as a small touchable patch
-        // centered on the focused screen while a field has focus — without this flag
-        // it silently swallows any real touch that lands on it (e.g. long-press to
-        // select text), which looks like "the screen stopped responding."
+        // Kept minimal and untouchable for the case where the system decides to
+        // show it anyway (onEvaluateInputViewShown is advisory): a zero-size,
+        // non-touchable view can't swallow a real touch meant for the app, which
+        // used to look like "the top screen stopped responding".
         window?.window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
         return View(this).apply { layoutParams = ViewGroup.LayoutParams(0, 0) }
     }
@@ -92,8 +109,18 @@ class OverlayInputMethodService : InputMethodService() {
         outInsets.touchableRegion.setEmpty()
     }
 
-    override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
-        super.onStartInputView(info, restarting)
+    /**
+     * Drives the panel instead of onStartInputView, which never fires now that
+     * no input view is shown. onStartInput is the session-level callback: it
+     * still runs on every focus change, and it's what makes the input
+     * connection available.
+     *
+     * It's also slightly *more* eager than onStartInputView — it fires when a
+     * field takes focus even if the app didn't explicitly request a keyboard —
+     * which suits this app, where a focused field should mean a usable keyboard.
+     */
+    override fun onStartInput(info: EditorInfo?, restarting: Boolean) {
+        super.onStartInput(info, restarting)
         isInputViewActive = true
         pendingCollapse?.let {
             collapseHandler.removeCallbacks(it)
@@ -101,7 +128,7 @@ class OverlayInputMethodService : InputMethodService() {
         }
         pendingCollapse = null
 
-        DebugLog.log("ime", "input view started (restarting=$restarting)")
+        DebugLog.log("ime", "input started (restarting=$restarting)")
         val existing = BottomPanelService.instance
         if (existing != null) {
             // restarting=false means focus genuinely moved to a field, which is a
@@ -131,10 +158,10 @@ class OverlayInputMethodService : InputMethodService() {
         }
     }
 
-    override fun onFinishInputView(finishingInput: Boolean) {
-        super.onFinishInputView(finishingInput)
+    override fun onFinishInput() {
+        super.onFinishInput()
         isInputViewActive = false
-        DebugLog.log("ime", "input view finished, collapse in ${COLLAPSE_DEBOUNCE_MS}ms")
+        DebugLog.log("ime", "input finished, collapse in ${COLLAPSE_DEBOUNCE_MS}ms")
         val runnable = Runnable {
             pendingCollapse = null
             DebugLog.log("ime", "debounced collapse firing")
