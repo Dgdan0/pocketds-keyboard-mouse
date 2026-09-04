@@ -111,6 +111,9 @@ class CursorAccessibilityService : AccessibilityService() {
         // Generous, because a scroll dispatches continuously and each segment's
         // events can land a little after the dispatch returns.
         private const val SYNTHETIC_ECHO_WINDOW_MS = 500L
+        // Brisk enough to register as a deliberate swipe, slow enough that apps
+        // track it as a drag instead of discarding it as teleportation.
+        private const val PAGE_SWIPE_DURATION_MS = 160L
     }
 
     override fun onServiceConnected() {
@@ -528,6 +531,35 @@ class CursorAccessibilityService : AccessibilityService() {
         scrollStroke2 = null
         pendingScrollDx = 0f
         pendingScrollDy = 0f
+    }
+
+    /**
+     * A single-finger horizontal fling across the middle of the screen — what
+     * page-turning actually needs.
+     *
+     * Two-finger scrolling doesn't work for this in readers and galleries,
+     * because two fingers there means pinch-to-zoom; they page on a one-finger
+     * swipe. (Chrome scrolls on any drag, which is why it worked and comic
+     * readers didn't.) Anchored at the screen's centre rather than the cursor so
+     * there's always room for a full swipe, and slow enough to read as a drag
+     * rather than being thrown away as an impossible jump.
+     */
+    fun swipePage(towardsNext: Boolean) {
+        onCursorActivity()
+        val midY = screenHeight / 2f
+        val reach = screenWidth * 0.3f
+        val centerX = screenWidth / 2f
+        // "Next" drags the content leftwards, the same way a finger would.
+        val startX = if (towardsNext) centerX + reach else centerX - reach
+        val endX = if (towardsNext) centerX - reach else centerX + reach
+
+        val path = Path().apply { moveTo(startX, midY); lineTo(endX, midY) }
+        val stroke = GestureDescription.StrokeDescription(path, 0, PAGE_SWIPE_DURATION_MS)
+        lastSyntheticDispatchAt = SystemClock.uptimeMillis()
+        val accepted = dispatchGesture(
+            GestureDescription.Builder().addStroke(stroke).build(), null, null
+        )
+        DebugLog.log("cursor", "page swipe ${if (towardsNext) "next" else "previous"}, accepted=$accepted")
     }
 
     private fun tapAt(x: Float, y: Float, durationMs: Long) {

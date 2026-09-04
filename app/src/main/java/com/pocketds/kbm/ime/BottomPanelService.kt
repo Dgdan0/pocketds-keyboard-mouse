@@ -51,6 +51,14 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
     // for the same field). Cleared as soon as focus moves to a new field.
     private var manuallyCollapsedThisSession = false
 
+    // A Presentation dismisses itself if the display it's on is removed or
+    // reconfigured, which happens on this device when apps are launched or moved
+    // between screens. Telling that apart from our own teardown matters: a
+    // system-initiated dismissal leaves us holding a dead presentation, and
+    // every later expand() call quietly does nothing on it.
+    private var dismissingDeliberately = false
+    private var lastAutoRecreateAt = 0L
+
     companion object {
         var instance: BottomPanelService? = null
             private set
@@ -109,13 +117,16 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
             DebugLog.log("panel", "expand suppressed (manually hidden this session)")
             return
         }
-        if (bottomPresentation == null) {
-            // The service is alive but has nothing on the bottom screen — e.g. the
-            // display wasn't ready when we last looked, or an IME switch tore the
-            // presentation down and we've since been selected again. Focusing a
-            // field is a clear request for the keyboard, so build it now rather
-            // than leaving the user with a focused field and a blank screen.
-            DebugLog.log("panel", "no presentation yet, creating one for this focus")
+        // isShowing as well as null: a presentation the system dismissed without
+        // us hearing about it would otherwise swallow setExpanded() silently.
+        if (bottomPresentation?.isShowing != true) {
+            // Nothing usable on the bottom screen — the display wasn't ready when
+            // we last looked, an IME switch tore it down, or it was dismissed by a
+            // display reconfiguration. Focusing a field is a clear request for the
+            // keyboard, so build one rather than leaving a focused field with a
+            // blank screen under it.
+            DebugLog.log("panel", "no live presentation, creating one for this focus")
+            dismissPresentation()
             refreshPresentationForCurrentIme()
             if (bottomPresentation == null) {
                 DebugLog.log("panel", "still no presentation — not the selected IME, or no second display")
@@ -168,14 +179,52 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
             }
         } else {
             DebugLog.log("panel", "another IME selected ($currentRaw), tearing down presentation")
-            bottomPresentation?.dismiss()
+            dismissPresentation()
+        }
+    }
+
+    /** Our own teardown, as opposed to the system pulling the presentation out
+     * from under us — see [dismissingDeliberately]. */
+    private fun dismissPresentation() {
+        val existing = bottomPresentation ?: return
+        dismissingDeliberately = true
+        try {
+            existing.dismiss()
+        } finally {
+            dismissingDeliberately = false
             bottomPresentation = null
         }
     }
 
+    /**
+     * The system dismissed the presentation itself — the bottom display was
+     * removed or reconfigured, which this device does when apps are launched or
+     * shuffled between screens. Drop the dead reference so it can be rebuilt,
+     * and bring it straight back if input is still active, since from the user's
+     * point of view the keyboard just vanished mid-use.
+     */
+    private fun onPresentationDismissedExternally(which: BottomScreenPresentation) {
+        if (dismissingDeliberately || bottomPresentation !== which) return
+        DebugLog.log("panel", "presentation dismissed by the system (display reconfigured?)")
+        bottomPresentation = null
+
+        if (!OverlayInputMethodService.isInputViewActive) return
+        // Rate-limited: if recreating immediately gets dismissed again, stop
+        // rather than spinning, and let the next focus rebuild it instead.
+        val now = SystemClock.uptimeMillis()
+        if (now - lastAutoRecreateAt < 1000L) {
+            DebugLog.log("panel", "dismissed again too soon, leaving it to the next focus")
+            return
+        }
+        lastAutoRecreateAt = now
+        val wasExpanded = panelExpanded
+        refreshPresentationForCurrentIme()
+        if (wasExpanded) bottomPresentation?.setExpanded(true)
+    }
+
     private fun showOnSecondaryDisplay(display: Display, startExpanded: Boolean) {
         DebugLog.log("panel", "creating presentation on display ${display.displayId}, expanded=$startExpanded")
-        bottomPresentation?.dismiss()
+        dismissPresentation()
         bottomPresentation = BottomScreenPresentation(
             this, display, this, this,
             onSettingsClick = { openSettings() },
@@ -204,10 +253,11 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
                 panelExpanded = true
                 updateCursorVisibility(currentMode)
             }
-        ).also {
-            it.show()
+        ).also { presentation ->
+            presentation.setOnDismissListener { onPresentationDismissedExternally(presentation) }
+            presentation.show()
             panelExpanded = startExpanded
-            it.setExpanded(startExpanded)
+            presentation.setExpanded(startExpanded)
         }
     }
 
@@ -267,8 +317,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
     override fun onDestroy() {
         super.onDestroy()
         contentResolver.unregisterContentObserver(defaultImeObserver)
-        bottomPresentation?.dismiss()
-        bottomPresentation = null
+        dismissPresentation()
         if (instance === this) instance = null
     }
 
@@ -313,6 +362,10 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
 
     override fun onScrollEnd() {
         CursorAccessibilityService.instance?.endScroll()
+    }
+
+    override fun onSwipePage(towardsNext: Boolean) {
+        CursorAccessibilityService.instance?.swipePage(towardsNext)
     }
 
     // --- FullKeyboardListener ---
