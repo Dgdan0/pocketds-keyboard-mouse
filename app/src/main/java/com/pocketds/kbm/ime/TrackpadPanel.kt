@@ -19,10 +19,6 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
     interface Listener : CursorListener {
         fun onScroll(dx: Float, dy: Float)
         fun onScrollEnd()
-
-        /** A one-finger page swipe, for readers and galleries where two fingers
-         * means zoom and so two-finger scrolling never turns the page. */
-        fun onSwipePage(towardsNext: Boolean)
     }
 
     companion object {
@@ -150,26 +146,6 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
         val buttonRow = LinearLayout(context).apply {
             orientation = HORIZONTAL
         }
-        // Page swipes flank the click buttons: narrow, so they don't compete with
-        // the clicks, but always to hand in readers and galleries.
-        val pagePrev = Button(context).apply {
-            text = "◀"
-            setOnClickListener { listener.onSwipePage(towardsNext = false) }
-            layoutParams = KeyStyler.applyKeyMargin(
-                context,
-                LinearLayout.LayoutParams(0, (56 * resources.displayMetrics.density).toInt(), 0.5f)
-            )
-            KeyStyler.styleKey(context, this, colors)
-        }
-        val pageNext = Button(context).apply {
-            text = "▶"
-            setOnClickListener { listener.onSwipePage(towardsNext = true) }
-            layoutParams = KeyStyler.applyKeyMargin(
-                context,
-                LinearLayout.LayoutParams(0, (56 * resources.displayMetrics.density).toInt(), 0.5f)
-            )
-            KeyStyler.styleKey(context, this, colors)
-        }
         val leftClick = Button(context).apply {
             text = "Left Click"
             setOnClickListener { listener.onLeftClick() }
@@ -188,10 +164,8 @@ class TrackpadPanel(context: Context, private val listener: Listener) : LinearLa
             )
             KeyStyler.styleKey(context, this, colors)
         }
-        buttonRow.addView(pagePrev)
         buttonRow.addView(leftClick)
         buttonRow.addView(rightClick)
-        buttonRow.addView(pageNext)
 
         addView(pad)
         addView(buttonRow)

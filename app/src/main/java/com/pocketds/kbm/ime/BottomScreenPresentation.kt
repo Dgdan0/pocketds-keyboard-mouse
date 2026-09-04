@@ -3,6 +3,8 @@ package com.pocketds.kbm.ime
 import android.app.Presentation
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
 import android.view.Display
@@ -137,6 +139,14 @@ class BottomScreenPresentation(
         // focus, so tapping it doesn't end the input session on the focused field's
         // window (on the other display).
         window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        // A Presentation is a Dialog underneath, and a dialog window paints its
+        // own opaque background. While the window filled the screen the panel
+        // covered it, but a bubble-sized window left that background showing as
+        // an ugly white square around the disc. Clearing it means only what we
+        // actually draw is visible — while the window (and so the touch target)
+        // stays the full padded square.
+        window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         // Monochrome on purpose: a small disc that sits quietly over whatever is
         // behind it reads better than a shrunken colour icon. Dark disc with a

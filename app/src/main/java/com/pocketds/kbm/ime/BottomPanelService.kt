@@ -424,9 +424,6 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         CursorAccessibilityService.instance?.endScroll()
     }
 
-    override fun onSwipePage(towardsNext: Boolean) {
-        CursorAccessibilityService.instance?.swipePage(towardsNext)
-    }
 
     // --- FullKeyboardListener ---
 

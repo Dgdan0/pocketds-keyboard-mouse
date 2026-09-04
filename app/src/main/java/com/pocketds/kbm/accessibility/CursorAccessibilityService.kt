@@ -50,12 +50,22 @@ class CursorAccessibilityService : AccessibilityService() {
     // dispatch something?" rather than by anything in the event itself.
     private var lastSyntheticDispatchAt = 0L
 
-    // --- Two-finger scroll ---------------------------------------------------
+    // --- Scroll --------------------------------------------------------------
     //
-    // Dispatched as one continuous held gesture — a touch-down, a chain of
-    // continueStroke() extensions, then a lift — because discrete
-    // drag-and-lift segments dispatch fine but feel visibly segmented (real
-    // hardware testing confirmed that). Three things make it fiddly:
+    // Dispatched as a ONE-finger drag, even though the user makes it with two
+    // fingers on the trackpad. Those are different things: two fingers is how an
+    // indirect pointing surface distinguishes "scroll" from "move the cursor",
+    // whereas what lands on the top screen is a synthetic touchscreen gesture —
+    // and a touchscreen scrolls with one finger. Two fingers there means
+    // pinch-to-zoom, which is why the earlier two-finger version zoomed in comic
+    // readers instead of turning pages, and why sideways scrolling was fragile.
+    // One finger is what a real hand would do, so it also gets page swipes,
+    // carousels and swipe-to-dismiss for free.
+    //
+    // It's one continuous held gesture — a touch-down, a chain of
+    // continueStroke() extensions, then a lift — because discrete drag-and-lift
+    // segments dispatch fine but feel visibly segmented (confirmed on hardware).
+    // Three things make that fiddly:
     //
     //  * continueStroke() only works on a stroke that has actually been
     //    dispatched AND completed. Continuing one that was never itself
@@ -65,24 +75,22 @@ class CursorAccessibilityService : AccessibilityService() {
     //    can begin while the previous one is still winding down.
     //    scrollGeneration lets callbacks belonging to an abandoned session be
     //    discarded instead of clobbering the new session's state.
-    //  * The synthetic fingers travel across a real screen, so a long swipe
-    //    runs out of room. On hitting the edge they're lifted and re-planted
-    //    back at the anchor, carrying the leftover movement over, rather than
-    //    clamping and silently dropping the rest of the swipe.
+    //  * The synthetic finger travels across a real screen, so a long swipe runs
+    //    out of room. On hitting the edge it's lifted and re-planted back at the
+    //    anchor, carrying the leftover movement over, rather than clamping and
+    //    silently dropping the rest of the swipe.
     //
     // pumpScroll() is the only place that decides what to dispatch next, so the
     // sequencing lives in one spot instead of being restated in every callback.
     private var scrollGeneration = 0
     private var scrollSessionActive = false
     private var scrollDispatchInFlight = false
-    private var scrollFingersDown = false
+    private var scrollFingerDown = false
     private var scrollNeedsReanchor = false
-    private var scrollStroke1: GestureDescription.StrokeDescription? = null
-    private var scrollStroke2: GestureDescription.StrokeDescription? = null
+    private var scrollStroke: GestureDescription.StrokeDescription? = null
     private var pendingScrollDx = 0f
     private var pendingScrollDy = 0f
-    private var scrollX1 = 0f
-    private var scrollX2 = 0f
+    private var scrollX = 0f
     private var scrollY = 0f
 
     companion object {
@@ -101,19 +109,15 @@ class CursorAccessibilityService : AccessibilityService() {
         // The initial "fingers touch down" stroke — short, since nothing should
         // visibly happen until the first real movement extends it.
         private const val SCROLL_TOUCH_DOWN_MS = 20L
-        // How far inside the screen edges the synthetic fingers stay. Leaves room
-        // to notice we've run out of travel and re-plant them mid-swipe.
+        // How far inside the screen edges the synthetic finger stays. Leaves room
+        // to notice we've run out of travel and re-plant it mid-swipe.
         private const val SCROLL_EDGE_MARGIN_PX = 90f
-        private const val SCROLL_FINGER_OFFSET_PX = 60f
         private const val FADE_DURATION_MS = 150L
         // How long after one of our own dispatched gestures an accessibility
         // event is still assumed to be the echo of it rather than a real finger.
         // Generous, because a scroll dispatches continuously and each segment's
         // events can land a little after the dispatch returns.
         private const val SYNTHETIC_ECHO_WINDOW_MS = 500L
-        // Brisk enough to register as a deliberate swipe, slow enough that apps
-        // track it as a drag instead of discarding it as teleportation.
-        private const val PAGE_SWIPE_DURATION_MS = 160L
     }
 
     override fun onServiceConnected() {
@@ -247,9 +251,9 @@ class CursorAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Feeds movement into the two-finger drag centred on the cursor — the only
-     * scroll mechanism AccessibilityService's gesture API exposes (there's no
-     * mouse-wheel/AXIS_VSCROLL injection available to accessibility services).
+     * Feeds movement into a drag anchored on the cursor — the only scroll
+     * mechanism AccessibilityService's gesture API exposes, since there's no
+     * mouse-wheel/AXIS_VSCROLL injection available to accessibility services.
      * dx/dy are already sign-adjusted by the caller for the invert-scroll setting.
      */
     fun scrollBy(dx: Float, dy: Float) {
@@ -260,7 +264,7 @@ class CursorAccessibilityService : AccessibilityService() {
         pumpScroll()
     }
 
-    /** The real fingers left the trackpad: lift the synthetic ones, so the next
+    /** The real fingers left the trackpad: lift the synthetic one, so the next
      * scrollBy() starts a fresh drag anchored back on the cursor. */
     fun endScroll() {
         if (!scrollSessionActive) return
@@ -275,67 +279,58 @@ class CursorAccessibilityService : AccessibilityService() {
         // the state being set up here.
         scrollGeneration++
         scrollSessionActive = true
-        scrollFingersDown = false
+        scrollFingerDown = false
         scrollNeedsReanchor = false
-        scrollStroke1 = null
-        scrollStroke2 = null
+        scrollStroke = null
         // Deltas left over from a previous or cancelled drag would otherwise be
         // replayed into this one as a single amplified jump.
         pendingScrollDx = 0f
         pendingScrollDy = 0f
-        anchorScrollFingers()
+        anchorScrollPointer()
         DebugLog.log("scroll", "session begin gen=$scrollGeneration")
     }
 
-    private fun anchorScrollFingers() {
-        val minX = SCROLL_EDGE_MARGIN_PX
-        val maxX = screenWidth - SCROLL_EDGE_MARGIN_PX
-        val minY = SCROLL_EDGE_MARGIN_PX
-        val maxY = screenHeight - SCROLL_EDGE_MARGIN_PX
-        scrollY = clamp(cursorY, minY, maxY)
-        scrollX1 = clamp(cursorX - SCROLL_FINGER_OFFSET_PX, minX, maxX)
-        scrollX2 = clamp(cursorX + SCROLL_FINGER_OFFSET_PX, minX, maxX)
+    private fun anchorScrollPointer() {
+        scrollX = clamp(cursorX, SCROLL_EDGE_MARGIN_PX, screenWidth - SCROLL_EDGE_MARGIN_PX)
+        scrollY = clamp(cursorY, SCROLL_EDGE_MARGIN_PX, screenHeight - SCROLL_EDGE_MARGIN_PX)
     }
 
     /**
      * Decides what the scroll gesture should do next. Safe to call at any time:
-     * it's a no-op while a dispatch is in flight, because that dispatch's
+     * it is a no-op while a dispatch is in flight, because that dispatch's
      * callback pumps again when it lands.
      */
     private fun pumpScroll() {
         if (scrollDispatchInFlight) return
-        if (scrollFingersDown && scrollNeedsReanchor) {
+        if (scrollFingerDown && scrollNeedsReanchor) {
             scrollNeedsReanchor = false
-            liftFingers(reanchor = scrollSessionActive)
+            liftPointer(reanchor = scrollSessionActive)
             return
         }
-        if (!scrollFingersDown) {
+        if (!scrollFingerDown) {
             if (scrollSessionActive) dispatchTouchDown()
             return
         }
         if (pendingScrollDx != 0f || pendingScrollDy != 0f) {
             dispatchContinuation()
         } else if (!scrollSessionActive) {
-            liftFingers(reanchor = false)
+            liftPointer(reanchor = false)
         }
     }
 
-    /** The fingers landing, not yet moving. Has to go out and come back before
-     * any movement can be sent, since continueStroke() needs a stroke that has
+    /** The finger landing, not yet moving. Has to go out and come back before any
+     * movement can be sent, since continueStroke() needs a stroke that has
      * actually completed. */
     private fun dispatchTouchDown() {
         val generation = scrollGeneration
-        val stroke1 = GestureDescription.StrokeDescription(
-            Path().apply { moveTo(scrollX1, scrollY) }, 0, SCROLL_TOUCH_DOWN_MS, true
-        )
-        val stroke2 = GestureDescription.StrokeDescription(
-            Path().apply { moveTo(scrollX2, scrollY) }, 0, SCROLL_TOUCH_DOWN_MS, true
+        val stroke = GestureDescription.StrokeDescription(
+            Path().apply { moveTo(scrollX, scrollY) }, 0, SCROLL_TOUCH_DOWN_MS, true
         )
 
         scrollDispatchInFlight = true
         lastSyntheticDispatchAt = SystemClock.uptimeMillis()
         val accepted = dispatchGesture(
-            GestureDescription.Builder().addStroke(stroke1).addStroke(stroke2).build(),
+            GestureDescription.Builder().addStroke(stroke).build(),
             object : GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
                     scrollDispatchInFlight = false
@@ -343,9 +338,8 @@ class CursorAccessibilityService : AccessibilityService() {
                         pumpScroll()
                         return
                     }
-                    scrollStroke1 = stroke1
-                    scrollStroke2 = stroke2
-                    scrollFingersDown = true
+                    scrollStroke = stroke
+                    scrollFingerDown = true
                     pumpScroll()
                 }
 
@@ -369,8 +363,7 @@ class CursorAccessibilityService : AccessibilityService() {
     }
 
     private fun dispatchContinuation() {
-        val stroke1 = scrollStroke1 ?: return
-        val stroke2 = scrollStroke2 ?: return
+        val stroke = scrollStroke ?: return
         val generation = scrollGeneration
 
         val dx = pendingScrollDx
@@ -378,44 +371,24 @@ class CursorAccessibilityService : AccessibilityService() {
         pendingScrollDx = 0f
         pendingScrollDy = 0f
 
-        val minX = SCROLL_EDGE_MARGIN_PX
-        val maxX = screenWidth - SCROLL_EDGE_MARGIN_PX
-        val minY = SCROLL_EDGE_MARGIN_PX
-        val maxY = screenHeight - SCROLL_EDGE_MARGIN_PX
-
-        val startX1 = scrollX1
-        val startX2 = scrollX2
+        val startX = scrollX
         val startY = scrollY
+        val endX = clamp(startX + dx, SCROLL_EDGE_MARGIN_PX, screenWidth - SCROLL_EDGE_MARGIN_PX)
+        val endY = clamp(startY + dy, SCROLL_EDGE_MARGIN_PX, screenHeight - SCROLL_EDGE_MARGIN_PX)
 
-        // The two fingers have to travel as a rigid pair. Clamping each one
-        // independently is what broke horizontal scrolling: on a sideways swipe
-        // the leading finger hits the screen edge first, and if the trailing one
-        // keeps going they converge — which is a pinch, not a pan, so apps
-        // either zoomed or ignored it. (Vertical was unaffected: both fingers
-        // share a Y, so they always clamped identically and stayed rigid.)
-        // Taking the smaller of the two allowed distances keeps the spacing
-        // fixed, and the shortfall triggers a re-plant like any other.
-        val allowedDx = smallerTravel(
-            clamp(startX1 + dx, minX, maxX) - startX1,
-            clamp(startX2 + dx, minX, maxX) - startX2
-        )
-        val endX1 = startX1 + allowedDx
-        val endX2 = startX2 + allowedDx
-        val endY = clamp(startY + dy, minY, maxY)
-
-        // Whatever the clamp ate is travel this gesture can't deliver: hand it
-        // back to pending and re-plant the fingers, so a long swipe carries on
-        // scrolling instead of quietly dying at the edge of the screen.
-        val unusedDx = dx - allowedDx
+        // Whatever the clamp ate is travel this gesture cannot deliver: hand it
+        // back to pending and re-plant, so a long swipe carries on scrolling
+        // instead of quietly dying at the edge of the screen.
+        val unusedDx = dx - (endX - startX)
         val unusedDy = dy - (endY - startY)
         if (abs(unusedDx) > 0.5f || abs(unusedDy) > 0.5f) {
             pendingScrollDx += unusedDx
             pendingScrollDy += unusedDy
             scrollNeedsReanchor = true
-            DebugLog.log("scroll", "out of travel, re-planting fingers")
+            DebugLog.log("scroll", "out of travel, re-planting")
         }
 
-        if (endX1 == startX1 && endX2 == startX2 && endY == startY) {
+        if (endX == startX && endY == startY) {
             // Nothing left to travel — skip the empty segment (a zero-length
             // stroke risks being refused outright) and go re-plant.
             scrollNeedsReanchor = true
@@ -423,23 +396,18 @@ class CursorAccessibilityService : AccessibilityService() {
             return
         }
 
-        scrollX1 = endX1
-        scrollX2 = endX2
+        scrollX = endX
         scrollY = endY
 
-        val nextStroke1 = stroke1.continueStroke(
-            Path().apply { moveTo(startX1, startY); lineTo(endX1, endY) },
-            0, SCROLL_SEGMENT_DURATION_MS, true
-        )
-        val nextStroke2 = stroke2.continueStroke(
-            Path().apply { moveTo(startX2, startY); lineTo(endX2, endY) },
+        val nextStroke = stroke.continueStroke(
+            Path().apply { moveTo(startX, startY); lineTo(endX, endY) },
             0, SCROLL_SEGMENT_DURATION_MS, true
         )
 
         scrollDispatchInFlight = true
         lastSyntheticDispatchAt = SystemClock.uptimeMillis()
         val accepted = dispatchGesture(
-            GestureDescription.Builder().addStroke(nextStroke1).addStroke(nextStroke2).build(),
+            GestureDescription.Builder().addStroke(nextStroke).build(),
             object : GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
                     scrollDispatchInFlight = false
@@ -447,8 +415,7 @@ class CursorAccessibilityService : AccessibilityService() {
                         pumpScroll()
                         return
                     }
-                    scrollStroke1 = nextStroke1
-                    scrollStroke2 = nextStroke2
+                    scrollStroke = nextStroke
                     pumpScroll()
                 }
 
@@ -471,37 +438,31 @@ class CursorAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Lifts the synthetic fingers. With [reanchor] set, they're immediately
+    /** Lifts the synthetic finger. With [reanchor] set, it is immediately
      * re-planted back at the cursor so a swipe that ran out of screen can keep
      * going; otherwise the drag is simply over. */
-    private fun liftFingers(reanchor: Boolean) {
-        val stroke1 = scrollStroke1
-        val stroke2 = scrollStroke2
-        scrollStroke1 = null
-        scrollStroke2 = null
-        scrollFingersDown = false
+    private fun liftPointer(reanchor: Boolean) {
+        val stroke = scrollStroke
+        scrollStroke = null
+        scrollFingerDown = false
 
-        if (stroke1 == null || stroke2 == null) {
+        if (stroke == null) {
             if (reanchor) {
-                anchorScrollFingers()
+                anchorScrollPointer()
                 pumpScroll()
             }
             return
         }
 
         val generation = scrollGeneration
-        val end1 = stroke1.continueStroke(
-            Path().apply { moveTo(scrollX1, scrollY) }, 0, 1L, false
+        val end = stroke.continueStroke(
+            Path().apply { moveTo(scrollX, scrollY) }, 0, 1L, false
         )
-        val end2 = stroke2.continueStroke(
-            Path().apply { moveTo(scrollX2, scrollY) }, 0, 1L, false
-        )
-        if (reanchor) anchorScrollFingers()
+        if (reanchor) anchorScrollPointer()
 
         scrollDispatchInFlight = true
-        lastSyntheticDispatchAt = SystemClock.uptimeMillis()
         val accepted = dispatchGesture(
-            GestureDescription.Builder().addStroke(end1).addStroke(end2).build(),
+            GestureDescription.Builder().addStroke(end).build(),
             object : GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
                     scrollDispatchInFlight = false
@@ -522,45 +483,16 @@ class CursorAccessibilityService : AccessibilityService() {
     }
 
     /** Gesture dispatch fell over — drop the whole drag rather than trying to
-     * continue from strokes the system has already torn down. */
+     * continue from a stroke the system has already torn down. */
     private fun abandonScroll() {
         scrollSessionActive = false
-        scrollFingersDown = false
+        scrollFingerDown = false
         scrollNeedsReanchor = false
-        scrollStroke1 = null
-        scrollStroke2 = null
+        scrollStroke = null
         pendingScrollDx = 0f
         pendingScrollDy = 0f
     }
 
-    /**
-     * A single-finger horizontal fling across the middle of the screen — what
-     * page-turning actually needs.
-     *
-     * Two-finger scrolling doesn't work for this in readers and galleries,
-     * because two fingers there means pinch-to-zoom; they page on a one-finger
-     * swipe. (Chrome scrolls on any drag, which is why it worked and comic
-     * readers didn't.) Anchored at the screen's centre rather than the cursor so
-     * there's always room for a full swipe, and slow enough to read as a drag
-     * rather than being thrown away as an impossible jump.
-     */
-    fun swipePage(towardsNext: Boolean) {
-        onCursorActivity()
-        val midY = screenHeight / 2f
-        val reach = screenWidth * 0.3f
-        val centerX = screenWidth / 2f
-        // "Next" drags the content leftwards, the same way a finger would.
-        val startX = if (towardsNext) centerX + reach else centerX - reach
-        val endX = if (towardsNext) centerX - reach else centerX + reach
-
-        val path = Path().apply { moveTo(startX, midY); lineTo(endX, midY) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, PAGE_SWIPE_DURATION_MS)
-        lastSyntheticDispatchAt = SystemClock.uptimeMillis()
-        val accepted = dispatchGesture(
-            GestureDescription.Builder().addStroke(stroke).build(), null, null
-        )
-        DebugLog.log("cursor", "page swipe ${if (towardsNext) "next" else "previous"}, accepted=$accepted")
-    }
 
     private fun tapAt(x: Float, y: Float, durationMs: Long) {
         val path = Path().apply { moveTo(x, y) }
@@ -572,9 +504,6 @@ class CursorAccessibilityService : AccessibilityService() {
 
     private fun clamp(value: Float, minVal: Float, maxVal: Float) = max(minVal, min(maxVal, value))
 
-    /** Whichever of the two distances is shorter in magnitude — both are the same
-     * sign here, being the same requested movement clamped against each edge. */
-    private fun smallerTravel(a: Float, b: Float) = if (abs(a) <= abs(b)) a else b
 
     /**
      * Used to spot the user reaching up and touching the top screen directly, so
