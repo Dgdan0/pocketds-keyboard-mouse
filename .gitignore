@@ -16,3 +16,6 @@ local.properties
 /tools/
 
 # Gradle wrapper jar is fine to keep, but ignore wrapper caches if any
+
+# Device screenshots from scripts/dev.sh shot
+shots/
