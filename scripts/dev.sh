@@ -13,7 +13,9 @@
 # Set POCKETDS_DEVICE to pin a device, otherwise the sole attached one is used.
 set -euo pipefail
 
-ADB="${ANDROID_HOME:-/c/Users/$USER/AppData/Local/Android/Sdk}/platform-tools/adb.exe"
+# $USER is not always set (Git Bash sets USERNAME instead, and neither is
+# guaranteed), so the home directory is what the default path hangs off.
+ADB="${ANDROID_HOME:-$HOME/AppData/Local/Android/Sdk}/platform-tools/adb.exe"
 PKG=com.pocketds.kbm
 IME="$PKG/.ime.OverlayInputMethodService"
 A11Y="$PKG/.accessibility.CursorAccessibilityService"

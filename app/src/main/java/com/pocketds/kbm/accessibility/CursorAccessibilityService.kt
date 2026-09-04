@@ -3,16 +3,21 @@ package com.pocketds.kbm.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.res.Configuration
+import android.graphics.Rect
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Display
 import android.view.Gravity
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import com.pocketds.kbm.debug.DebugLog
 import com.pocketds.kbm.settings.CursorSettings
 import com.pocketds.kbm.settings.ThemeSettings
@@ -111,6 +116,10 @@ class CursorAccessibilityService : AccessibilityService() {
          * touch-and-hold delay setting rather than ignoring it.
          */
         private const val LONG_PRESS_MARGIN_MS = 60L
+        /** Bounds on the tree walk, so a pathological layout cannot stall a
+         * right-click on the main thread. */
+        private const val MAX_NODE_DEPTH = 40
+        private const val MAX_NODES_SCANNED = 400
         private const val SCROLL_SEGMENT_DURATION_MS = 40L
         // The initial "fingers touch down" stroke — short, since nothing should
         // visibly happen until the first real movement extends it.
@@ -253,7 +262,86 @@ class CursorAccessibilityService : AccessibilityService() {
 
     fun rightClick() {
         onCursorActivity()
+        // Asking the view under the cursor to long-click itself is instant.
+        // Holding a synthetic finger down has to outlast the system's long-press
+        // threshold, which is around half a second the user feels every time.
+        if (performLongClickUnderCursor()) return
+        // Plenty of views respond to a long press without advertising
+        // themselves as long-clickable, so the held finger stays as a fallback.
+        DebugLog.log("cursor", "no long-clickable view under the cursor, holding instead")
         tapAt(cursorX, cursorY, longPressDurationMs())
+    }
+
+    /**
+     * Long-clicks whatever the cursor is over, if it will accept one.
+     *
+     * Needs `canRetrieveWindowContent`, which is why it is worth being narrow
+     * about: the window list is only walked at the moment a right-click is
+     * requested, nothing about the screen is stored, and only the bounds and
+     * the long-clickable flag are read.
+     */
+    private fun performLongClickUnderCursor(): Boolean {
+        val x = cursorX.toInt()
+        val y = cursorY.toInt()
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        val candidates = mutableListOf<NodeCandidate>()
+
+        for (window in windows.orEmpty()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && window.displayId != cursorDisplayId()) continue
+            // Our own cursor overlay sits exactly under the point by
+            // definition, so it must never be a candidate.
+            if (window.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) continue
+            val root = window.root ?: continue
+            collectCandidates(root, depth = 0, nodes = nodes, candidates = candidates)
+        }
+
+        val target = LongClickTarget.pick(candidates, x, y)
+        val performed = target != null &&
+            nodes[target.index].performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+        if (performed) DebugLog.log("cursor", "long-clicked the view under the cursor")
+        return performed
+    }
+
+    /** The pointer lives on the display the focused app is on, which is the
+     * default one — the panel is what sits on the other screen. */
+    private fun cursorDisplayId(): Int = Display.DEFAULT_DISPLAY
+
+    private fun collectCandidates(
+        node: AccessibilityNodeInfo,
+        depth: Int,
+        nodes: MutableList<AccessibilityNodeInfo>,
+        candidates: MutableList<NodeCandidate>
+    ) {
+        if (depth > MAX_NODE_DEPTH || candidates.size >= MAX_NODES_SCANNED) return
+
+        nodes += node
+        candidates += node.toCandidate(index = nodes.size - 1, depth = depth)
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            // Whole subtrees the cursor is nowhere near are skipped, which keeps
+            // this cheap on a deep layout. Containment is asked of the candidate
+            // rather than of Rect, whose own contains() excludes the right and
+            // bottom edges that the picking rule includes.
+            val candidate = child.toCandidate(index = -1, depth = depth + 1)
+            if (candidate.contains(cursorX.toInt(), cursorY.toInt())) {
+                collectCandidates(child, depth + 1, nodes, candidates)
+            }
+        }
+    }
+
+    private fun AccessibilityNodeInfo.toCandidate(index: Int, depth: Int): NodeCandidate {
+        val bounds = Rect()
+        getBoundsInScreen(bounds)
+        return NodeCandidate(
+            index = index,
+            left = bounds.left,
+            top = bounds.top,
+            right = bounds.right,
+            bottom = bounds.bottom,
+            longClickable = isLongClickable && isEnabled,
+            depth = depth
+        )
     }
 
     /** Android has no right-click, so a long press is the closest system-wide
