@@ -158,6 +158,23 @@ class TwoFingerGestureTest {
     }
 
     @Test
+    fun `handover does not impose a second dead zone mid-scroll`() {
+        // The start gate exists to swallow the jitter of two fingers landing.
+        // Re-arming it when a finger lifts made an established scroll stall
+        // again part-way through, which reads as the scroll going heavy.
+        val s = twoFingers()
+        s.moveAllBy(0f, -20f)
+        // The finger being followed is the one that lifts, so the gesture has to
+        // hand over to the survivor — without re-arming the gate.
+        s.pointerUp(0)
+
+        assertEquals(
+            listOf(GestureCommand.Scroll(dx = 0f, dy = -6f)),
+            s.moveBy(1, 0f, -2f)
+        )
+    }
+
+    @Test
     fun `a scroll ends when the last finger lifts`() {
         val s = twoFingers()
         s.moveAllBy(0f, -20f)

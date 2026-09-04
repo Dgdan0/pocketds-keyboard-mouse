@@ -1,6 +1,5 @@
 package com.pocketds.kbm
 
-import android.app.ActivityOptions
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -9,7 +8,6 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.method.ScrollingMovementMethod
-import android.util.Log
 import android.view.Display
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
@@ -22,6 +20,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
 import com.pocketds.kbm.debug.DebugLog
 import com.pocketds.kbm.ime.BottomPanelService
+import com.pocketds.kbm.launch.launchOnePasswordOnDisplay
 import com.pocketds.kbm.settings.CursorSettings
 import com.pocketds.kbm.settings.ScrollSettings
 import com.pocketds.kbm.settings.ThemeSettings
@@ -29,11 +28,6 @@ import com.pocketds.kbm.settings.ThemeSettings
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
-
-    companion object {
-        private const val TAG = "PocketDS"
-        private const val ONEPASSWORD_PACKAGE = "com.onepassword.android"
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         applyNightMode()
@@ -171,14 +165,7 @@ class MainActivity : AppCompatActivity() {
             .firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }?.displayId
             ?: Display.DEFAULT_DISPLAY
 
-        val intent = packageManager.getLaunchIntentForPackage(ONEPASSWORD_PACKAGE)
-        if (intent == null) {
-            Log.w(TAG, "1Password ($ONEPASSWORD_PACKAGE) isn't installed")
-            return
-        }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val options = ActivityOptions.makeBasic().apply { setLaunchDisplayId(secondaryDisplayId) }
-        startActivity(intent, options.toBundle())
+        launchOnePasswordOnDisplay(this, secondaryDisplayId)
     }
 
     override fun onResume() {

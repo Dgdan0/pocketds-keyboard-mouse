@@ -32,8 +32,13 @@ data class GestureConfig(
      * two-finger tap impossible to tell from a two-finger drag. Movement inside
      * the gate is accumulated rather than discarded, so nothing is lost; it is
      * only delayed until the gesture is unambiguous.
+     *
+     * Kept small on purpose. At 8px it was plainly felt: every scroll started
+     * with a dead patch and then lurched as the withheld movement arrived all
+     * at once. It only has to outlast the pixel or two of jitter from two
+     * fingers touching down, so a few pixels is enough to stay invisible.
      */
-    val scrollStartSlopPx: Float = 8f
+    val scrollStartSlopPx: Float = 3f
 ) {
     companion object {
         val DEFAULT = GestureConfig()

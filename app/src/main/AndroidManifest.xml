@@ -8,6 +8,17 @@
          open the app first (see PanelBootReceiver). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!--
+      Android 11+ hides other installed apps unless they are declared here. Without
+      this, getLaunchIntentForPackage() returns null even when 1Password IS
+      installed, so the launch button took its "not installed" branch and did
+      nothing. Both package names are listed because version 8 and version 7 differ.
+    -->
+    <queries>
+        <package android:name="com.onepassword.android" />
+        <package android:name="com.agilebits.onepassword" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

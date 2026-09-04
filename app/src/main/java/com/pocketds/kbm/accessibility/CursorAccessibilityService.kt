@@ -10,6 +10,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import com.pocketds.kbm.debug.DebugLog
@@ -99,12 +100,17 @@ class CursorAccessibilityService : AccessibilityService() {
 
         private const val CURSOR_SIZE_DP = 26
         private const val TAP_DURATION_MS = 40L
-        // Android has no native right-click gesture; a long-press is the closest
-        // system-wide equivalent (it opens context menus the same way). This needs
-        // real margin above ViewConfiguration's ~500ms long-press timeout, or our
-        // gesture's "up" can land right at the wire and lose the race, silently
-        // eating the long-press instead of triggering it.
-        private const val LONG_PRESS_DURATION_MS = 650L
+        /**
+         * Margin added on top of the system's long-press threshold. Our
+         * synthetic "up" has to land clearly after the threshold or it loses the
+         * race and the long-press is silently eaten.
+         *
+         * This used to be a flat 650ms, chosen to clear an assumed ~500ms
+         * threshold. Reading the real value instead means the wait is as short
+         * as the device actually allows — and it follows the user's own
+         * touch-and-hold delay setting rather than ignoring it.
+         */
+        private const val LONG_PRESS_MARGIN_MS = 60L
         private const val SCROLL_SEGMENT_DURATION_MS = 40L
         // The initial "fingers touch down" stroke — short, since nothing should
         // visibly happen until the first real movement extends it.
@@ -247,8 +253,14 @@ class CursorAccessibilityService : AccessibilityService() {
 
     fun rightClick() {
         onCursorActivity()
-        tapAt(cursorX, cursorY, LONG_PRESS_DURATION_MS)
+        tapAt(cursorX, cursorY, longPressDurationMs())
     }
+
+    /** Android has no right-click, so a long press is the closest system-wide
+     * equivalent — it opens context menus the same way. Held just past whatever
+     * the system currently considers a long press. */
+    private fun longPressDurationMs(): Long =
+        ViewConfiguration.getLongPressTimeout() + LONG_PRESS_MARGIN_MS
 
     /**
      * Feeds movement into a drag anchored on the cursor — the only scroll

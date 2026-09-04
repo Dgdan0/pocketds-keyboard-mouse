@@ -172,9 +172,13 @@ class TrackpadGestureRecognizer(private val config: GestureConfig = GestureConfi
         trackedPointerId = survivor.id
         lastX = survivor.x
         lastY = survivor.y
-        // The surviving finger is somewhere else entirely, so re-baseline the
-        // gate too or the handover distance would fling it open by itself.
-        openGateAt(survivor.x, survivor.y)
+        // The surviving finger is somewhere else entirely, so the gate's origin
+        // has to move with it or the handover distance would fling the gate open
+        // by itself. Its open/closed state is left alone: re-arming it made an
+        // established scroll stall again part-way through, which felt like the
+        // scroll suddenly going heavy.
+        gateOriginX = survivor.x
+        gateOriginY = survivor.y
         return emptyList()
     }
 

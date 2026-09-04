@@ -14,12 +14,12 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Log
 import android.view.Display
 import android.view.KeyEvent
 import com.pocketds.kbm.MainActivity
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
 import com.pocketds.kbm.debug.DebugLog
+import com.pocketds.kbm.launch.launchOnePasswordOnDisplay
 import com.pocketds.kbm.layout.InputMode
 import com.pocketds.kbm.settings.ScrollSettings
 
@@ -65,8 +65,6 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
 
         private const val CHANNEL_ID = "pocketds_bottom_panel"
         private const val NOTIFICATION_ID = 1
-        private const val TAG = "PocketDS"
-        private const val ONEPASSWORD_PACKAGE = "com.onepassword.android"
         const val ACTION_REFRESH_THEME = "com.pocketds.kbm.ACTION_REFRESH_THEME"
     }
 
@@ -349,15 +347,11 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
      * gets 1Password itself up on the bottom screen to browse/copy a credential.
      */
     private fun launchOnePassword() {
-        val displayId = secondaryDisplayId ?: Display.DEFAULT_DISPLAY
-        val intent = packageManager.getLaunchIntentForPackage(ONEPASSWORD_PACKAGE)
-        if (intent == null) {
-            Log.w(TAG, "1Password ($ONEPASSWORD_PACKAGE) isn't installed")
-            return
-        }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val options = ActivityOptions.makeBasic().apply { setLaunchDisplayId(displayId) }
-        startActivity(intent, options.toBundle())
+        // A fresh lookup rather than the cached secondaryDisplayId, which can
+        // name a display that no longer exists — this device replaces the bottom
+        // one out from under us.
+        val displayId = findSecondaryDisplay()?.displayId ?: Display.DEFAULT_DISPLAY
+        launchOnePasswordOnDisplay(this, displayId)
     }
 
     private fun buildNotification(): Notification {
