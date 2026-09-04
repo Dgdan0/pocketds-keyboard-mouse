@@ -22,8 +22,9 @@ class LongClickTargetTest {
         bottom: Int,
         longClickable: Boolean = true,
         clickable: Boolean = false,
+        editable: Boolean = false,
         depth: Int = 0
-    ) = NodeCandidate(index, left, top, right, bottom, longClickable, clickable, depth)
+    ) = NodeCandidate(index, left, top, right, bottom, longClickable, clickable, editable, depth)
 
     @Test
     fun `picks a long-clickable view under the point`() {
@@ -215,5 +216,70 @@ class LongClickTargetTest {
         )
 
         assertEquals(listOf(1), order.map { it.index })
+    }
+
+    // --- text is a special case ------------------------------------------
+
+    @Test
+    fun `a text field is not treated as an ordinary target`() {
+        // A long click names a view, not a point, and for text the point is the
+        // whole question: which word. Asking a field to long-click itself
+        // selects wherever its caret happens to be, which is not where the
+        // cursor is pointing, and it reports success — so it would also stop
+        // anything better being tried.
+        val order = LongClickTarget.rank(
+            listOf(candidate(index = 0, left = 0, top = 0, right = 400, bottom = 60, editable = true)),
+            x = 200,
+            y = 30
+        )
+
+        assertEquals(emptyList<Int>(), order.map { it.index })
+    }
+
+    @Test
+    fun `the text field under the cursor is offered separately`() {
+        val field = LongClickTarget.textFieldAt(
+            listOf(candidate(index = 0, left = 0, top = 0, right = 400, bottom = 60, editable = true)),
+            x = 200,
+            y = 30
+        )
+
+        assertEquals(0, field?.index)
+    }
+
+    @Test
+    fun `a text field the cursor is not over is not offered`() {
+        val field = LongClickTarget.textFieldAt(
+            listOf(candidate(index = 0, left = 0, top = 0, right = 400, bottom = 60, editable = true)),
+            x = 200,
+            y = 500
+        )
+
+        assertNull(field)
+    }
+
+    @Test
+    fun `the innermost text field wins`() {
+        val field = LongClickTarget.textFieldAt(
+            listOf(
+                candidate(index = 0, left = 0, top = 0, right = 400, bottom = 200, editable = true, depth = 2),
+                candidate(index = 1, left = 10, top = 10, right = 390, bottom = 60, editable = true, depth = 9)
+            ),
+            x = 200,
+            y = 30
+        )
+
+        assertEquals(1, field?.index)
+    }
+
+    @Test
+    fun `a button is not mistaken for a text field`() {
+        val field = LongClickTarget.textFieldAt(
+            listOf(candidate(index = 0, left = 0, top = 0, right = 400, bottom = 60)),
+            x = 200,
+            y = 30
+        )
+
+        assertNull(field)
     }
 }

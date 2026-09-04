@@ -115,13 +115,15 @@ class CursorAccessibilityService : AccessibilityService() {
          * as the device actually allows — and it follows the user's own
          * touch-and-hold delay setting rather than ignoring it.
          */
-        private const val LONG_PRESS_MARGIN_MS = 60L
+        private const val LONG_PRESS_MARGIN_MS = 250L
         /** Bounds on the tree walk, so a pathological layout cannot stall a
          * right-click on the main thread. */
         private const val MAX_NODE_DEPTH = 40
         private const val MAX_NODES_SCANNED = 400
         private const val TAP_DISPATCH_RETRIES = 4
         private const val TAP_RETRY_DELAY_MS = 16L
+        /** Just long enough to register as a tap, short enough to be unnoticed. */
+        private const val CARET_TAP_MS = 40L
         private const val SCROLL_SEGMENT_DURATION_MS = 40L
         // The initial "fingers touch down" stroke — short, since nothing should
         // visibly happen until the first real movement extends it.
@@ -297,6 +299,15 @@ class CursorAccessibilityService : AccessibilityService() {
             collectCandidates(root, depth = 0, nodes = nodes, candidates = candidates)
         }
 
+        // Text first: a long click on a field selects whatever word its caret
+        // is on, so on its own it acts in the wrong place. Put the caret where
+        // the cursor is pointing and it does exactly the right thing.
+        val field = LongClickTarget.textFieldAt(candidates, x, y)
+        if (field != null) {
+            selectWordUnderCursor(nodes[field.index])
+            return true
+        }
+
         // Work outwards from the innermost view, since isLongClickable is
         // advertising rather than truth and the action itself is the only
         // reliable answer. Anything container-sized is skipped: a long click
@@ -311,6 +322,49 @@ class CursorAccessibilityService : AccessibilityService() {
         }
         DebugLog.log("cursor", "${ranked.size} candidate(s) under the cursor, none took a long click")
         return false
+    }
+
+    /**
+     * Selects the word the cursor is over, by placing the caret there and then
+     * asking the field to long-click itself.
+     *
+     * A plain tap is what moves the caret, and it has to land before the
+     * selection is asked for — hence the chained callback rather than two calls
+     * in a row. Together they come in around a tenth of a second, against most
+     * of a second for holding a finger down, which is the whole point.
+     */
+    private fun selectWordUnderCursor(node: AccessibilityNodeInfo) {
+        val path = Path().apply { moveTo(cursorX, cursorY) }
+        val tap = GestureDescription.StrokeDescription(path, 0, CARET_TAP_MS)
+        markSyntheticDispatch(CARET_TAP_MS)
+        val dispatched = dispatchGesture(
+            GestureDescription.Builder().addStroke(tap).build(),
+            object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    finishWordSelection(node)
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    finishWordSelection(node)
+                }
+            },
+            null
+        )
+        if (!dispatched) {
+            DebugLog.log("cursor", "caret tap refused, holding instead")
+            tapAt(cursorX, cursorY, longPressDurationMs())
+        }
+    }
+
+    private fun finishWordSelection(node: AccessibilityNodeInfo) {
+        // Re-read the node: the tap that moved the caret may have rebuilt it.
+        node.refresh()
+        if (node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)) {
+            DebugLog.log("cursor", "selected the word under the cursor")
+        } else {
+            DebugLog.log("cursor", "field would not select, holding instead")
+            tapAt(cursorX, cursorY, longPressDurationMs())
+        }
     }
 
     /**
@@ -361,6 +415,7 @@ class CursorAccessibilityService : AccessibilityService() {
             bottom = bounds.bottom,
             longClickable = isLongClickable && isEnabled,
             clickable = isClickable && isEnabled,
+            editable = isEditable,
             depth = depth
         )
     }
@@ -628,8 +683,22 @@ class CursorAccessibilityService : AccessibilityService() {
         val path = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
-        lastSyntheticDispatchAt = SystemClock.uptimeMillis()
+        markSyntheticDispatch(durationMs)
         dispatchGesture(gesture, null, null)
+    }
+
+    /**
+     * Notes that we are about to touch the screen ourselves, so the interaction
+     * the app reports back is not mistaken for the user reaching up to the top
+     * screen (which hides the cursor, on the reasoning that a finger has taken
+     * over from the pointer).
+     *
+     * Stamped forward to when the gesture will *finish*, because the app only
+     * reacts then. A long press outlasts the echo window on its own, so every
+     * right-click was hiding the cursor.
+     */
+    private fun markSyntheticDispatch(durationMs: Long = 0L) {
+        lastSyntheticDispatchAt = SystemClock.uptimeMillis() + durationMs
     }
 
     private fun clamp(value: Float, minVal: Float, maxVal: Float) = max(minVal, min(maxVal, value))

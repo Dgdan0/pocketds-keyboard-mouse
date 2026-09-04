@@ -16,6 +16,8 @@ data class NodeCandidate(
     val longClickable: Boolean,
     /** Views that take a plain click often handle a long one without saying so. */
     val clickable: Boolean = false,
+    /** Text you can edit, where a long click is about *which word*. */
+    val editable: Boolean = false,
     /** How deep in the view tree, so the innermost match can win. */
     val depth: Int = 0
 ) {
@@ -64,6 +66,11 @@ object LongClickTarget {
         candidates
             .filter {
                 (it.longClickable || it.clickable) &&
+                    // Text needs its caret put in the right place first, so it
+                    // is offered through textFieldAt instead. Left here it
+                    // would select at the wrong word *and report success*,
+                    // which would stop anything better being tried.
+                    !it.editable &&
                     it.area > 0 &&
                     it.area <= maxArea &&
                     it.contains(x, y)
@@ -78,4 +85,17 @@ object LongClickTarget {
 
     fun pick(candidates: List<NodeCandidate>, x: Int, y: Int): NodeCandidate? =
         rank(candidates, x, y).firstOrNull()
+
+    /**
+     * The innermost editable field under the point, if there is one.
+     *
+     * Text is the one case where a coordinate-free long click is meaningless on
+     * its own: it selects whatever word the caret is already on. Given a caret
+     * placed where the cursor is pointing, though, it does exactly the right
+     * thing — so the caller taps first and then asks.
+     */
+    fun textFieldAt(candidates: List<NodeCandidate>, x: Int, y: Int): NodeCandidate? =
+        candidates
+            .filter { it.editable && it.area > 0 && it.contains(x, y) }
+            .maxWithOrNull(compareBy({ it.depth }, { -it.area }))
 }
