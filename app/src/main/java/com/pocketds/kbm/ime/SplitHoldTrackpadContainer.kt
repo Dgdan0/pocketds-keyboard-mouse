@@ -32,11 +32,6 @@ class SplitHoldTrackpadContainer(
         private const val HOLD_THRESHOLD_MS = 650L
         private const val COOLDOWN_MS = 2000L
         private const val MOVE_SLOP_PX = 20f
-        private const val TAP_SLOP_PX = 12f
-        private const val SENSITIVITY = 1.5f
-        // Matches TrackpadPanel: the bottom screen is smaller than the one being
-        // scrolled, so finger travel has to cover more ground than 1:1.
-        private const val SCROLL_SENSITIVITY = 2.2f
         private const val FADE_MS = 200L
     }
 
@@ -44,11 +39,8 @@ class SplitHoldTrackpadContainer(
     private var state = State.NORMAL
     private var downX = 0f
     private var downY = 0f
-    private var lastX = 0f
-    private var lastY = 0f
-    private var totalMoved = 0f
-    private var isScrolling = false
-    private var trackedPointerId = -1
+
+    private val touchAdapter = TrackpadTouchAdapter(trackpadListener)
 
     private val keyboardPanel = KeyboardPanel(context, keyboardListener)
     private val trackpadOverlay = TextView(context).apply {
@@ -74,9 +66,6 @@ class SplitHoldTrackpadContainer(
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.x
                 downY = ev.y
-                lastX = ev.x
-                lastY = ev.y
-                totalMoved = 0f
                 if (state == State.TRACKPAD_ACTIVE) {
                     handler.removeCallbacks(cooldownRunnable)
                     return true
@@ -108,79 +97,21 @@ class SplitHoldTrackpadContainer(
     }
 
     /**
-     * Mirrors TrackpadPanel's gesture handling, including two-finger scroll —
-     * this used to only track a single pointer, so scrolling silently did
-     * nothing on the revealed trackpad even though the same gesture worked on
-     * Split's little strip up top. Same reasoning as there: follow one pointer's
-     * raw movement rather than averaging both, since real touch hardware
-     * doesn't always report two points cleanly.
+     * Gesture recognition is delegated to the shared adapter, so the revealed
+     * trackpad behaves exactly like the real one. It used to hold its own copy
+     * of the state machine that only ever tracked a single pointer, which is why
+     * two-finger scrolling silently did nothing here while working on Split's
+     * strip up top.
+     *
+     * Note this can receive a MOVE with no DOWN before it: the hold gesture
+     * starts intercepting part-way through a touch. The recogniser anchors
+     * quietly in that case rather than reporting the position as travel.
      */
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        touchAdapter.onTouchEvent(event)
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                lastX = event.x
-                lastY = event.y
-                totalMoved = 0f
-                isScrolling = false
-                trackedPointerId = event.getPointerId(0)
-            }
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                isScrolling = true
-                val idx = event.findPointerIndex(trackedPointerId)
-                if (idx >= 0) {
-                    lastX = event.getX(idx)
-                    lastY = event.getY(idx)
-                }
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (isScrolling) {
-                    val idx = event.findPointerIndex(trackedPointerId)
-                    if (idx >= 0) {
-                        val x = event.getX(idx)
-                        val y = event.getY(idx)
-                        trackpadListener.onScroll(
-                            (x - lastX) * SCROLL_SENSITIVITY,
-                            (y - lastY) * SCROLL_SENSITIVITY
-                        )
-                        lastX = x
-                        lastY = y
-                    }
-                } else {
-                    val dx = (event.x - lastX) * SENSITIVITY
-                    val dy = (event.y - lastY) * SENSITIVITY
-                    totalMoved += abs(event.x - lastX) + abs(event.y - lastY)
-                    lastX = event.x
-                    lastY = event.y
-                    trackpadListener.onMove(dx, dy)
-                }
-            }
-            MotionEvent.ACTION_POINTER_UP -> {
-                // Stays a scroll through the handover: ending it when the first
-                // of two fingers lifts cuts the tail of the swipe short and
-                // turns the still-moving finger into a stray cursor jump.
-                if (event.getPointerId(event.actionIndex) == trackedPointerId) {
-                    val remaining = if (event.actionIndex == 0) 1 else 0
-                    if (remaining < event.pointerCount) {
-                        trackedPointerId = event.getPointerId(remaining)
-                        lastX = event.getX(remaining)
-                        lastY = event.getY(remaining)
-                    }
-                }
-            }
-            MotionEvent.ACTION_UP -> {
-                if (isScrolling) {
-                    trackpadListener.onScrollEnd()
-                } else if (totalMoved < TAP_SLOP_PX) {
-                    trackpadListener.onLeftClick()
-                }
-                isScrolling = false
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
                 handler.postDelayed(cooldownRunnable, COOLDOWN_MS)
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                if (isScrolling) trackpadListener.onScrollEnd()
-                isScrolling = false
-                handler.postDelayed(cooldownRunnable, COOLDOWN_MS)
-            }
         }
         return true
     }
@@ -200,6 +131,11 @@ class SplitHoldTrackpadContainer(
             backspaceLoc[1] - containerLoc[1] + backspace.height
         )
         return rect.contains(x.toInt(), y.toInt())
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        touchAdapter.cancel()
     }
 
     private fun enterTrackpadMode() {

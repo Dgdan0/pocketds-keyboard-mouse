@@ -32,6 +32,12 @@ android {
 }
 
 dependencies {
+    // Gesture, key and physics logic lives in plain Kotlin classes that take
+    // primitives rather than View/MotionEvent/Context, so it can be tested on
+    // the JVM without a device or Robolectric. Verifying this app on hardware is
+    // slow and awkward enough that anything decidable off-device should be.
+    testImplementation("junit:junit:4.13.2")
+
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     // Spring/fling physics for the floating bubble. Hand-rolled easing on a
