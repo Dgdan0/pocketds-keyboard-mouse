@@ -24,6 +24,14 @@ class TwoFingerGestureTest {
 
     private fun script() = TouchScript(config)
 
+    /**
+     * A gate well below the tap slop, which is the shipping relationship: it
+     * leaves a band where a wobble is big enough to start a scroll and still
+     * small enough to be a tap. The two have to be reconciled somewhere, and
+     * pinning both numbers here says which reconciliation is under test.
+     */
+    private fun jitteryTapScript() = TouchScript(config.copy(scrollStartSlopPx = 3f, tapSlopPx = 12f))
+
     /** Two fingers down, ready to scroll. */
     private fun twoFingers(): TouchScript {
         val s = script()
@@ -231,6 +239,41 @@ class TwoFingerGestureTest {
             "jitter must not reach the other screen as a scroll, got ${s.all}",
             s.all.none { it is GestureCommand.Scroll }
         )
+    }
+
+    @Test
+    fun `a two-finger tap that jitters past the gate still right-clicks`() {
+        // Real fingers are never still, and the scroll gate is only a few
+        // pixels, so an ordinary tap trips it and emits a scroll. Deciding on
+        // the way down ("it scrolled, so it cannot be a tap") throws the
+        // right-click away; the whole gesture is only known on lift, and a
+        // wobble well inside the tap slop moved nothing the user can see.
+        val s = jitteryTapScript()
+        s.down(100f, 100f, id = 0)
+        s.pointerDown(1, 200f, 100f, afterMs = 30)
+        s.moveAllBy(0f, -6f)
+        s.pointerUp(1, afterMs = 60)
+        s.up(afterMs = 20)
+
+        assertTrue("expected a right-click, got ${s.all}", s.all.contains(GestureCommand.RightClick))
+    }
+
+    @Test
+    fun `a jittery two-finger tap closes its scroll before right-clicking`() {
+        // A scroll that was started holds a finger down on the other screen.
+        // Right-clicking without releasing it first would leave that finger
+        // stuck there.
+        val s = jitteryTapScript()
+        s.down(100f, 100f, id = 0)
+        s.pointerDown(1, 200f, 100f, afterMs = 30)
+        s.moveAllBy(0f, -6f)
+        s.pointerUp(1, afterMs = 60)
+        s.up(afterMs = 20)
+
+        val ending = s.all.filter {
+            it == GestureCommand.ScrollEnd || it == GestureCommand.RightClick
+        }
+        assertEquals(listOf(GestureCommand.ScrollEnd, GestureCommand.RightClick), ending)
     }
 
     @Test

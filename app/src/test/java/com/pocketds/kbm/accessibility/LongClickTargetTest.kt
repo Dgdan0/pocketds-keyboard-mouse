@@ -21,8 +21,9 @@ class LongClickTargetTest {
         right: Int,
         bottom: Int,
         longClickable: Boolean = true,
+        clickable: Boolean = false,
         depth: Int = 0
-    ) = NodeCandidate(index, left, top, right, bottom, longClickable, depth)
+    ) = NodeCandidate(index, left, top, right, bottom, longClickable, clickable, depth)
 
     @Test
     fun `picks a long-clickable view under the point`() {
@@ -133,5 +134,86 @@ class LongClickTargetTest {
         )
 
         assertEquals(1, target?.index)
+    }
+
+    // --- how wide a net to cast ------------------------------------------
+
+    @Test
+    fun `a view that only advertises a plain click is still worth asking`() {
+        // isLongClickable is advertising, not truth: plenty of views handle a
+        // long press without setting it. Asking costs nothing, because the
+        // action reports back whether it was handled.
+        val target = LongClickTarget.pick(
+            listOf(candidate(index = 0, left = 0, top = 0, right = 100, bottom = 100,
+                longClickable = false, clickable = true)),
+            x = 50,
+            y = 50
+        )
+
+        assertEquals(0, target?.index)
+    }
+
+    @Test
+    fun `a view that advertises a long click is asked before one that does not`() {
+        val order = LongClickTarget.rank(
+            listOf(
+                candidate(index = 0, left = 0, top = 0, right = 100, bottom = 100,
+                    longClickable = false, clickable = true, depth = 4),
+                candidate(index = 1, left = 0, top = 0, right = 100, bottom = 100,
+                    longClickable = true, depth = 4)
+            ),
+            x = 50,
+            y = 50
+        )
+
+        assertEquals(listOf(1, 0), order.map { it.index })
+    }
+
+    @Test
+    fun `candidates come back innermost first, so each can be tried in turn`() {
+        val order = LongClickTarget.rank(
+            listOf(
+                candidate(index = 0, left = 0, top = 0, right = 100, bottom = 100, depth = 1),
+                candidate(index = 1, left = 20, top = 20, right = 80, bottom = 80, depth = 7),
+                candidate(index = 2, left = 10, top = 10, right = 90, bottom = 90, depth = 4)
+            ),
+            x = 50,
+            y = 50
+        )
+
+        assertEquals(listOf(1, 2, 0), order.map { it.index })
+    }
+
+    @Test
+    fun `a view too large to be a single target is left to the held press`() {
+        // A long click carries no coordinates: it acts on a view, not a point.
+        // For a small widget that is the same thing, but asking a web page or a
+        // whole list to long-click itself acts in the wrong place — or does
+        // nothing while reporting success, which is worse, since it would stop
+        // us falling back. A held finger is slower but lands where the cursor
+        // actually is, so anything container-sized belongs to it.
+        val order = LongClickTarget.rank(
+            listOf(candidate(index = 0, left = 0, top = 0, right = 1000, bottom = 1000)),
+            x = 500,
+            y = 500,
+            maxArea = 100 * 100
+        )
+
+        assertEquals(emptyList<Int>(), order.map { it.index })
+    }
+
+    @Test
+    fun `a widget inside a view too large to target is still offered`() {
+        val order = LongClickTarget.rank(
+            listOf(
+                candidate(index = 0, left = 0, top = 0, right = 1000, bottom = 1000, depth = 1),
+                candidate(index = 1, left = 480, top = 480, right = 520, bottom = 520, depth = 6)
+            ),
+            x = 500,
+            y = 500,
+            maxArea = 100 * 100
+        )
+
+        assertEquals(listOf(1), order.map { it.index })
     }
 }

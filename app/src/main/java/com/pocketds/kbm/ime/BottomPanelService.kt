@@ -130,6 +130,14 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         refreshPresentationForCurrentIme()
     }
 
+    /**
+     * The app we gave the bottom screen to, or null when the panel owns it.
+     *
+     * Our panel covers that screen, so anything launched there is behind it.
+     * See [HandoverPolicy] for how the screen comes back.
+     */
+    private var handedOverTo: String? = null
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_REFRESH_THEME) {
             val wasExpanded = panelExpanded || OverlayInputMethodService.isInputViewActive
@@ -152,7 +160,22 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
      *   any manual-hide suppression: hiding the panel applies to the field you
      *   hid it on, not to every field you touch afterwards.
      */
-    fun expand(freshSession: Boolean = false) {
+    fun expand(freshSession: Boolean = false, editorPackage: String? = null) {
+        when (HandoverPolicy.decide(handedOverTo, editorPackage)) {
+            HandoverDecision.SUPPRESS -> {
+                // Deliberately not cleared by freshSession, unlike the manual
+                // hide below: the app we handed the screen to starts its own
+                // input session, which is a fresh session, and clearing here
+                // would cover the app the user just opened.
+                DebugLog.log("panel", "expand suppressed (bottom screen is $handedOverTo's)")
+                return
+            }
+            HandoverDecision.RELEASE_AND_EXPAND -> {
+                DebugLog.log("panel", "focus moved to $editorPackage, taking the bottom screen back")
+                handedOverTo = null
+            }
+            HandoverDecision.EXPAND -> Unit
+        }
         if (freshSession && manuallyCollapsedThisSession) {
             DebugLog.log("panel", "new focus session, clearing manual-hide suppression")
             manuallyCollapsedThisSession = false
@@ -302,6 +325,12 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
                 CursorAccessibilityService.instance?.setCursorAllowed(false)
             },
             onExpandRequested = {
+                // Tapping the bubble is the user asking for the keyboard, which
+                // outranks any handover.
+                if (handedOverTo != null) {
+                    DebugLog.log("panel", "bubble tapped, taking the bottom screen back from $handedOverTo")
+                    handedOverTo = null
+                }
                 // Pulled back up from the handle strip. An explicit request like
                 // this also clears the manual-hide suppression — the user asking
                 // for the panel is the opposite of wanting it kept down.
@@ -346,12 +375,21 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
      * letting any app silently redirect autofill would be a security hole. This just
      * gets 1Password itself up on the bottom screen to browse/copy a credential.
      */
-    private fun launchOnePassword() {
+    fun launchOnePassword() {
         // A fresh lookup rather than the cached secondaryDisplayId, which can
         // name a display that no longer exists — this device replaces the bottom
         // one out from under us.
         val displayId = findSecondaryDisplay()?.displayId ?: Display.DEFAULT_DISPLAY
-        launchOnePasswordOnDisplay(this, displayId)
+        val opened = launchOnePasswordOnDisplay(this, displayId) ?: return
+        if (displayId == Display.DEFAULT_DISPLAY) return
+
+        // It opened on the bottom screen, which our panel covers completely, so
+        // until we move it was running invisibly behind us. Collapsing to the
+        // bubble reveals it and leaves a way back: the bubble floats above it
+        // and taps back to the keyboard.
+        handedOverTo = opened
+        DebugLog.log("panel", "handed the bottom screen to $opened, collapsing to the bubble")
+        collapse()
     }
 
     private fun buildNotification(): Notification {

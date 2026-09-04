@@ -120,6 +120,8 @@ class CursorAccessibilityService : AccessibilityService() {
          * right-click on the main thread. */
         private const val MAX_NODE_DEPTH = 40
         private const val MAX_NODES_SCANNED = 400
+        private const val TAP_DISPATCH_RETRIES = 4
+        private const val TAP_RETRY_DELAY_MS = 16L
         private const val SCROLL_SEGMENT_DURATION_MS = 40L
         // The initial "fingers touch down" stroke — short, since nothing should
         // visibly happen until the first real movement extends it.
@@ -295,12 +297,30 @@ class CursorAccessibilityService : AccessibilityService() {
             collectCandidates(root, depth = 0, nodes = nodes, candidates = candidates)
         }
 
-        val target = LongClickTarget.pick(candidates, x, y)
-        val performed = target != null &&
-            nodes[target.index].performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-        if (performed) DebugLog.log("cursor", "long-clicked the view under the cursor")
-        return performed
+        // Work outwards from the innermost view, since isLongClickable is
+        // advertising rather than truth and the action itself is the only
+        // reliable answer. Anything container-sized is skipped: a long click
+        // names a view, not a point, so on a web page or a list it would act in
+        // the wrong place — the held finger handles those accurately instead.
+        val ranked = LongClickTarget.rank(candidates, x, y, maxArea = maxTargetArea())
+        for (target in ranked) {
+            if (nodes[target.index].performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)) {
+                DebugLog.log("cursor", "long-clicked the view under the cursor")
+                return true
+            }
+        }
+        DebugLog.log("cursor", "${ranked.size} candidate(s) under the cursor, none took a long click")
+        return false
     }
+
+    /**
+     * How big a view may be and still be an unambiguous long-click target.
+     *
+     * A third of the screen: a list row or a card is well inside it, while the
+     * things that must not be asked — a web page, a full-height list, the decor
+     * view — are all far past it.
+     */
+    private fun maxTargetArea(): Int = screenWidth * screenHeight / 3
 
     /** The pointer lives on the display the focused app is on, which is the
      * default one — the panel is what sits on the other screen. */
@@ -340,6 +360,7 @@ class CursorAccessibilityService : AccessibilityService() {
             right = bounds.right,
             bottom = bounds.bottom,
             longClickable = isLongClickable && isEnabled,
+            clickable = isClickable && isEnabled,
             depth = depth
         )
     }
@@ -594,7 +615,16 @@ class CursorAccessibilityService : AccessibilityService() {
     }
 
 
-    private fun tapAt(x: Float, y: Float, durationMs: Long) {
+    private fun tapAt(x: Float, y: Float, durationMs: Long, attempt: Int = 0) {
+        // A right-click can follow immediately after the lift that ends a
+        // scroll — a two-finger tap whose own wobble started one. The system
+        // takes a single gesture at a time, so dispatching into the tail of
+        // that lift is silently dropped, and the tap goes missing. The lift is
+        // a 1ms stroke, so waiting for it costs nothing anyone can perceive.
+        if (scrollDispatchInFlight && attempt < TAP_DISPATCH_RETRIES) {
+            idleHandler.postDelayed({ tapAt(x, y, durationMs, attempt + 1) }, TAP_RETRY_DELAY_MS)
+            return
+        }
         val path = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()

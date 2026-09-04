@@ -188,18 +188,29 @@ class TrackpadGestureRecognizer(private val config: GestureConfig = GestureConfi
         val stayedPut = maxExcursionPx <= config.tapSlopPx
 
         val commands = when {
-            scrollLatched -> when {
-                // Two fingers down, nothing scrolled, over quickly: a two-finger
-                // tap, which is the conventional right-click. Guarded on all
-                // three so resting a second finger during a long drag cannot
-                // produce one.
-                !didEmitScroll && maxPointerCount == 2 && wasBrief && stayedPut ->
-                    listOf(GestureCommand.RightClick)
+            scrollLatched -> {
                 // Only close a scroll that actually started. Ending one that
                 // never began made the other screen see a touch-down and lift
                 // at the same spot — a stray tap.
-                didEmitScroll -> listOf(GestureCommand.ScrollEnd)
-                else -> emptyList()
+                val ending =
+                    if (didEmitScroll) listOf(GestureCommand.ScrollEnd) else emptyList()
+                // Two fingers down, over quickly, and it stayed put: a
+                // two-finger tap, which is the conventional right-click.
+                //
+                // Deliberately not conditioned on whether a scroll was emitted.
+                // The gate is only a few pixels, so an ordinary tap's wobble
+                // trips it, and ruling out a right-click on that basis is what
+                // stopped two-finger taps working once the gate came down from
+                // 8px. Travel is the honest test, and it is checked here
+                // against the tap slop — a few pixels moved nothing the user
+                // can see, whereas a gesture meant as a scroll goes far past
+                // it. Any scroll that did start is closed first, so no finger
+                // is left pressed on the other screen.
+                if (maxPointerCount == 2 && wasBrief && stayedPut) {
+                    ending + GestureCommand.RightClick
+                } else {
+                    ending
+                }
             }
             wasBrief && stayedPut -> listOf(GestureCommand.LeftClick)
             else -> emptyList()

@@ -160,6 +160,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openOnePasswordOnBottomScreen() {
+        // Prefer the panel service, which knows to get out of the way: it owns
+        // the whole bottom screen, so 1Password would otherwise open behind it.
+        BottomPanelService.instance?.let {
+            it.launchOnePassword()
+            return
+        }
+
+        // No panel running, so nothing is covering the bottom screen anyway.
         val displayManager = getSystemService(DISPLAY_SERVICE) as DisplayManager
         val secondaryDisplayId = displayManager.displays
             .firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }?.displayId
