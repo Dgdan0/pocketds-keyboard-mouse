@@ -260,7 +260,9 @@
             android:layout_marginTop="4dp"
             android:text="Android won't let a third-party app set another app as the autofill service for security reasons — that first step has to be done manually below. After that, 1Password's suggestions appear in a strip above the keys whenever you focus a login field.
 
-1Password opens on the top screen, not the bottom one. It cannot unlock itself down there: the system destroys any fingerprint prompt whose app isn't the top task, and it reads that from the top screen. The keyboard stays up while you look, so you can copy above and paste below."
+1Password opens on the bottom screen and the keyboard shrinks to the lower half, so you can see both.
+
+One thing outside our control: it can't run its fingerprint prompt down there. The system destroys any biometric prompt whose app isn't the top task, and it reads that from the top screen. If 1Password has locked itself, unlock it on the top screen once and the bottom screen works from then on."
             android:textSize="13sp" />
 
         <Button

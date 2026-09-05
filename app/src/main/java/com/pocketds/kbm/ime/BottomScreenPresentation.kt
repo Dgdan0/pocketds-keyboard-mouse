@@ -59,10 +59,13 @@ class BottomScreenPresentation(
 
     enum class PanelState { EXPANDED, BUBBLE, TUCKED }
 
+
     private lateinit var bubble: BubbleView
     private lateinit var inputPanelView: InputPanelView
 
     private var state = PanelState.BUBBLE
+    private fun density(): Float = context.resources.displayMetrics.density
+
     /** Window position of the bubble, in pixels from the display's top-left. */
     private var bubbleX = 0f
     private var bubbleY = 0f
@@ -76,6 +79,12 @@ class BottomScreenPresentation(
         /** Invisible margin around the disc: a bigger touch target than the
          * drawn circle, and room for the press animation to grow into. */
         private const val BUBBLE_PAD_DP = 9
+        /** Compact mode: roughly what a phone keyboard takes, which is the
+         * shape being copied. */
+        private const val COMPACT_FRACTION = 0.5f
+        private const val COMPACT_MIN_KEYBOARD_DP = 150
+        /** Enough of the app above to be worth looking at. */
+        private const val COMPACT_MIN_APP_DP = 120
         private const val TUCK_WIDTH_DP = 14
         private const val TUCK_HEIGHT_DP = 46
         /**
@@ -230,6 +239,20 @@ class BottomScreenPresentation(
      * Collapsing returns to whichever parked shape the user last chose, so
      * tucking it away out of the way isn't undone by the next focus change.
      */
+    /**
+     * Whether expanding should take the whole screen or only the lower part.
+     *
+     * Set by the service, which is what knows whether another app is using this
+     * screen — and read on every expansion, including the user tapping the
+     * bubble, so both routes produce the same shape.
+     */
+    var compact = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (state == PanelState.EXPANDED) applyWindowGeometry(sizeChanged = true)
+        }
+
     fun setExpanded(expand: Boolean) {
         val target = when {
             expand -> PanelState.EXPANDED
@@ -367,9 +390,24 @@ class BottomScreenPresentation(
         when (state) {
             PanelState.EXPANDED -> {
                 params.width = WindowManager.LayoutParams.MATCH_PARENT
-                params.height = WindowManager.LayoutParams.MATCH_PARENT
                 params.x = 0
-                params.y = 0
+                if (compact) {
+                    // Something else is using this screen, so take only the
+                    // lower part of it and leave that app visible above —
+                    // the way a phone keyboard shares a screen with an app.
+                    val screenHeight = context.resources.displayMetrics.heightPixels
+                    val height = CompactPanelHeight.forDisplay(
+                        displayHeightPx = screenHeight,
+                        fraction = COMPACT_FRACTION,
+                        minKeyboardPx = (COMPACT_MIN_KEYBOARD_DP * density()).toInt(),
+                        minAppPx = (COMPACT_MIN_APP_DP * density()).toInt()
+                    )
+                    params.height = height
+                    params.y = screenHeight - height
+                } else {
+                    params.height = WindowManager.LayoutParams.MATCH_PARENT
+                    params.y = 0
+                }
             }
             PanelState.BUBBLE -> {
                 params.width = bubbleWindowPx

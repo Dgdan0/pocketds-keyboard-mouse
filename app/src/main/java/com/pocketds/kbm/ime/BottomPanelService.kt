@@ -225,8 +225,10 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
                 return
             }
         }
-        DebugLog.log("panel", "expand -> mode=$currentMode")
+        DebugLog.log("panel", "expand -> mode=$currentMode compact=${bottomScreenOccupant != null}")
         panelExpanded = true
+        // Only take the whole screen when nothing else is using it.
+        bottomPresentation?.compact = bottomScreenOccupant != null
         bottomPresentation?.setExpanded(true)
         updateCursorVisibility(currentMode)
     }
@@ -342,7 +344,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
                 // deliberately *not* forgotten -- doing that would have the
                 // next window event rediscover it and stand down again.
                 if (bottomScreenOccupant != null) {
-                    DebugLog.log("panel", "bubble tapped, keyboard goes over $bottomScreenOccupant")
+                    DebugLog.log("panel", "bubble tapped, compact keyboard over $bottomScreenOccupant")
                     userTookScreenBack = true
                 }
                 // Pulled back up from the handle strip. An explicit request like
@@ -465,6 +467,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
             OccupancyChange.TAKEN -> {
                 bottomScreenOccupant = occupant
                 userTookScreenBack = false
+                bottomPresentation?.compact = true
                 DebugLog.log("panel", "$occupant took the bottom screen, standing down to the bubble")
                 collapse()
             }
@@ -472,6 +475,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
                 DebugLog.log("panel", "$bottomScreenOccupant left the bottom screen")
                 bottomScreenOccupant = null
                 userTookScreenBack = false
+                bottomPresentation?.compact = false
             }
             OccupancyChange.UNCHANGED -> Unit
         }
@@ -509,20 +513,31 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
     }
 
     /**
-     * Opens 1Password on the *top* screen, deliberately.
+     * Opens 1Password on the bottom screen, with the keyboard shrunk to the
+     * lower half so both are usable at once.
      *
-     * The bottom screen would be the obvious place, and it was — but 1Password
-     * can never unlock itself there. SystemUI destroys any biometric prompt
-     * whose app is not the top running task, and that task is read from the
-     * main screen, so a fingerprint prompt raised from the bottom one is
-     * evicted within about 30ms of appearing, untouched. Nothing on our side
-     * changes that; the app has to be where the system is looking.
-     *
-     * The keyboard stays up down here as a result, so a password can be copied
-     * above and pasted below without the panel moving at all.
+     * One caveat that is not ours to fix: 1Password cannot run its fingerprint
+     * prompt down here. SystemUI destroys any biometric prompt whose app is not
+     * the top running task, and it reads that task from the *top* screen, so a
+     * prompt raised from this one is evicted within about 30ms, untouched. An
+     * already-unlocked vault is fine; a locked one has to be unlocked on the
+     * top screen first.
      */
     fun launchOnePassword() {
-        launchOnePasswordOnDisplay(this, Display.DEFAULT_DISPLAY)
+        // A fresh lookup rather than the cached secondaryDisplayId, which can
+        // name a display that no longer exists — this device replaces the bottom
+        // one out from under us.
+        val displayId = findSecondaryDisplay()?.displayId ?: Display.DEFAULT_DISPLAY
+        val opened = launchOnePasswordOnDisplay(this, displayId) ?: return
+        if (displayId == Display.DEFAULT_DISPLAY) return
+
+        // Deliberately expanded rather than stood down to the bubble, unlike an
+        // app the user opened themselves: asking for 1Password from the
+        // keyboard means wanting both at once.
+        bottomScreenOccupant = opened
+        userTookScreenBack = true
+        DebugLog.log("panel", "$opened opened below, keyboard going compact")
+        expand()
     }
 
     private fun buildNotification(): Notification {
