@@ -135,6 +135,50 @@
             android:text="Hide the pointer after this long without using the trackpad. It reappears the moment you touch the trackpad again."
             android:textSize="13sp" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Key feedback"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="A short tick as each key goes down, the way a real key gives way under your finger. Follows the system's touch-feedback setting, so turning haptics off device-wide silences this too."
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/hapticGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/radioHapticOff"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Off" />
+
+            <RadioButton
+                android:id="@+id/radioHapticLight"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Light" />
+
+            <RadioButton
+                android:id="@+id/radioHapticStrong"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Strong" />
+        </RadioGroup>
+
         <RadioGroup
             android:id="@+id/cursorIdleGroup"
             android:layout_width="match_parent"

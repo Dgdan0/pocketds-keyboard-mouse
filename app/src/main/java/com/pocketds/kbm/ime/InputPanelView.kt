@@ -74,6 +74,7 @@ class InputPanelView(
                 layoutParams = KeyStyler.applyKeyMargin(context, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 setOnClickListener { showMode(mode) }
             }
+            KeyStyler.attachPressHaptic(tab)
             tabs[mode] = tab
             strip.addView(tab)
         }
@@ -101,6 +102,7 @@ class InputPanelView(
             setColor(iconColors.keySurface)
         }
         setOnClickListener { onClick() }
+        KeyStyler.attachPressHaptic(this)
     }
 
     fun showInputMethodPicker() {
@@ -267,6 +269,7 @@ class InputPanelView(
                 hideMenu()
                 onMenuAction?.invoke(item.id)
             }
+            KeyStyler.attachPressHaptic(this)
         }
         row.addView(TextView(context).apply {
             text = item.icon

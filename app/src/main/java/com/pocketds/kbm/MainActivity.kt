@@ -21,8 +21,11 @@ import com.pocketds.kbm.debug.DebugLog
 import com.pocketds.kbm.ime.BottomPanelService
 import com.pocketds.kbm.launch.launchOnePasswordOnDisplay
 import com.pocketds.kbm.settings.CursorSettings
+import com.pocketds.kbm.settings.HapticSettings
 import com.pocketds.kbm.settings.ScrollSettings
 import com.pocketds.kbm.settings.ThemeSettings
+import com.pocketds.kbm.ui.HapticStrength
+import com.pocketds.kbm.ui.KeyHaptics
 
 class MainActivity : AppCompatActivity() {
 
@@ -72,8 +75,27 @@ class MainActivity : AppCompatActivity() {
             openOnePassword()
         }
 
+        setUpHapticOptions()
         setUpCursorOptions()
         setUpDebugTrace()
+    }
+
+    private fun setUpHapticOptions() {
+        val group = findViewById<RadioGroup>(R.id.hapticGroup)
+        val idToStrength = mapOf(
+            R.id.radioHapticOff to HapticStrength.OFF,
+            R.id.radioHapticLight to HapticStrength.LIGHT,
+            R.id.radioHapticStrong to HapticStrength.STRONG
+        )
+        val current = HapticSettings.strength(this)
+        group.check(idToStrength.entries.first { it.value == current }.key)
+        group.setOnCheckedChangeListener { _, id ->
+            val strength = idToStrength[id] ?: return@setOnCheckedChangeListener
+            HapticSettings.setStrength(this, strength)
+            // Let them feel the choice they just made, rather than having to go
+            // and type something to find out.
+            KeyHaptics.perform(group, strength)
+        }
     }
 
     private fun setUpCursorOptions() {

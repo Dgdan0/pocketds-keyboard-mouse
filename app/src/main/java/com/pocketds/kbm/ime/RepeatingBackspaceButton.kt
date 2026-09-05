@@ -3,9 +3,12 @@ package com.pocketds.kbm.ime
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.widget.Button
 import android.widget.LinearLayout
+import com.pocketds.kbm.settings.HapticSettings
+import com.pocketds.kbm.ui.KeyHaptics
 import com.pocketds.kbm.ui.KeyStyler
 import com.pocketds.kbm.ui.PocketColors
 
@@ -23,6 +26,12 @@ fun buildRepeatingBackspaceKey(
 ): Button {
     val handler = Handler(Looper.getMainLooper())
     var repeatCount = 0
+    // This key installs its own touch listener below, which replaces the one
+    // KeyStyler attaches — so the press feedback has to be done by hand here,
+    // and gated, since a held backspace repeats up to 25 times a second and
+    // buzzing on each is a rattle rather than feedback.
+    val hapticGate = KeyHaptics.RepeatGate()
+    lateinit var key: Button
 
     val tick = object : Runnable {
         override fun run() {
@@ -32,11 +41,15 @@ fun buildRepeatingBackspaceKey(
             } else {
                 onDeleteChars(1)
             }
+            if (hapticGate.allow(SystemClock.uptimeMillis())) {
+                KeyHaptics.perform(key, HapticSettings.strength(key.context))
+            }
             handler.postDelayed(this, intervalForRepeat(repeatCount))
         }
     }
 
-    return Button(context).apply {
+    key = Button(context)
+    return key.apply {
         text = "⌫"
         layoutParams = KeyStyler.applyKeyMargin(
             context,
@@ -48,12 +61,17 @@ fun buildRepeatingBackspaceKey(
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     repeatCount = 0
+                    hapticGate.release()
+                    if (hapticGate.allow(SystemClock.uptimeMillis())) {
+                        KeyHaptics.perform(this, HapticSettings.strength(context))
+                    }
                     onDeleteChars(1)
                     handler.postDelayed(tick, INITIAL_DELAY_MS)
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     handler.removeCallbacks(tick)
+                    hapticGate.release()
                     if (event.actionMasked == MotionEvent.ACTION_UP) performClick()
                     true
                 }
