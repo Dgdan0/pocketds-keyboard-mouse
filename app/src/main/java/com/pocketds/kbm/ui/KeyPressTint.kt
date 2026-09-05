@@ -15,8 +15,13 @@ import kotlin.math.roundToInt
  */
 object KeyPressTint {
 
-    /** Enough to read as pressed, little enough not to flash. */
-    private const val SHIFT = 0.13f
+    /**
+     * Enough to read as pressed, little enough not to flash.
+     *
+     * Nudged up once the ripple was removed: this is now the only thing saying
+     * a key went down, so it has to carry that on its own.
+     */
+    private const val SHIFT = 0.16f
 
     fun pressed(color: Int, dark: Boolean): Int {
         val alpha = (color ushr 24) and 0xFF

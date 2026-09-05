@@ -2,9 +2,7 @@ package com.pocketds.kbm.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.res.ColorStateList
 import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.StateListDrawable
 import android.view.MotionEvent
 import android.view.View
@@ -23,18 +21,21 @@ object KeyStyler {
             cornerRadius = radius
             setColor(fill)
         }
-        // A key held down changes colour, which nothing here used to show — the
-        // ripple is an echo that trails behind fast typing rather than telling
-        // you what is down right now.
         val held = GradientDrawable().apply {
             cornerRadius = radius
             setColor(KeyPressTint.pressed(fill, dark))
         }
-        val byState = StateListDrawable().apply {
+        // No ripple. It was drawn over the whole key rather than inside its
+        // rounded shape, so it read as a wash spreading from the middle instead
+        // of anything to do with where the finger was — and being nearly opaque
+        // it buried the pressed colour underneath it. It is also an animation,
+        // which by its nature trails a finger that has already moved on. The
+        // state change is instant, on and off with the key, which is what a
+        // good keyboard does.
+        button.background = StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_pressed), held)
             addState(intArrayOf(), base)
         }
-        button.background = RippleDrawable(ColorStateList.valueOf(colors.keySurfaceRipple), byState, null)
         attachPressHaptic(button)
         button.setTextColor(if (accent) colors.accentText else colors.keyText)
         button.stateListAnimator = null
