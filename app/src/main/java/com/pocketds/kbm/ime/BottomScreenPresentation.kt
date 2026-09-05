@@ -63,6 +63,7 @@ class BottomScreenPresentation(
 
     private lateinit var bubble: BubbleView
     private lateinit var inputPanelView: InputPanelView
+    private lateinit var blackSheet: View
 
     private var state = PanelState.BUBBLE
     private fun density(): Float = context.resources.displayMetrics.density
@@ -180,9 +181,30 @@ class BottomScreenPresentation(
                 setExpanded(false)
                 onTemporaryCollapse?.invoke()
             },
-            onToggleCompact = { compact = !compact }
+            onMenuAction = { id ->
+                when (id) {
+                    PanelMenuId.HIDE -> {
+                        setExpanded(false)
+                        onHideRequested?.invoke()
+                    }
+                    PanelMenuId.TOGGLE_SIZE -> compact = !compact
+                    PanelMenuId.SCREEN_OFF -> setBlackedOut(true)
+                    PanelMenuId.ONE_PASSWORD -> onOnePasswordClick?.invoke()
+                    // Gets out of the way on its own: the system picker renders
+                    // beneath this window, so it collapses first.
+                    PanelMenuId.CHANGE_KEYBOARD -> inputPanelView.showInputMethodPicker()
+                    PanelMenuId.SETTINGS -> onSettingsClick?.invoke()
+                }
+            }
         )
         inputPanelView.setCompact(compact)
+
+        blackSheet = View(context).apply {
+            setBackgroundColor(0xFF000000.toInt())
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { setBlackedOut(false) }
+        }
 
         val root = FrameLayout(context).apply {
             addView(
@@ -200,6 +222,13 @@ class BottomScreenPresentation(
                 )
             )
         }
+        root.addView(
+            blackSheet,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
         setContentView(root)
 
         restorePlacement()
@@ -371,8 +400,44 @@ class BottomScreenPresentation(
         PanelState.TUCKED -> tuckWindowHeightPx
     }
 
+    /**
+     * Blacks out the bottom screen, and dims its backlight as far as the system
+     * allows, so it stops competing with a film on the top one.
+     *
+     * A tap anywhere brings back exactly what was there before — the panel is
+     * only hidden behind the sheet, never rebuilt, so the mode and shape are
+     * whatever they were.
+     */
+    fun setBlackedOut(black: Boolean) {
+        if (blackedOut == black) return
+        blackedOut = black
+        DebugLog.log("panel", if (black) "screen off" else "screen back on")
+        applyState()
+
+        val win = window ?: return
+        val params = win.attributes
+        // Not merely a black window: this asks the display itself to go as dim
+        // as it will, which on a backlit panel is the difference between very
+        // dark grey and nearly off.
+        params.screenBrightness = if (black) 0f else
+            WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        win.attributes = params
+    }
+
+    fun isBlackedOut() = blackedOut
+
+    private var blackedOut = false
+
     private fun applyState() {
         if (!::bubble.isInitialized) return
+        if (blackedOut) {
+            inputPanelView.visibility = View.GONE
+            bubble.visibility = View.GONE
+            blackSheet.visibility = View.VISIBLE
+            applyWindowGeometry(sizeChanged = true)
+            return
+        }
+        blackSheet.visibility = View.GONE
         val expanded = state == PanelState.EXPANDED
         inputPanelView.visibility = if (expanded) View.VISIBLE else View.GONE
         bubble.visibility = if (expanded) View.GONE else View.VISIBLE
@@ -391,6 +456,18 @@ class BottomScreenPresentation(
         val win = window ?: return
         val params = win.attributes
         params.gravity = Gravity.TOP or Gravity.START
+        if (blackedOut) {
+            // The whole screen, or the part left uncovered would still glow.
+            params.width = WindowManager.LayoutParams.MATCH_PARENT
+            params.height = WindowManager.LayoutParams.MATCH_PARENT
+            params.x = 0
+            params.y = 0
+            win.attributes = params
+            window?.decorView?.let { decor ->
+                if (decor.isAttachedToWindow) forceRelayout(decor, params, sizeChanged)
+            }
+            return
+        }
         when (state) {
             PanelState.EXPANDED -> {
                 params.width = WindowManager.LayoutParams.MATCH_PARENT

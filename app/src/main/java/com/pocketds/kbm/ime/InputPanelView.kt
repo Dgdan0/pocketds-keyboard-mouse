@@ -8,6 +8,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import com.pocketds.kbm.debug.DebugLog
 import com.pocketds.kbm.layout.InputMode
@@ -29,12 +30,12 @@ class InputPanelView(
     private val onModeChanged: ((InputMode) -> Unit)? = null,
     private val onHideClick: (() -> Unit)? = null,
     private val onCollapseForPicker: (() -> Unit)? = null,
-    private val onToggleCompact: (() -> Unit)? = null
+    private val onMenuAction: ((PanelMenuId) -> Unit)? = null
 ) : LinearLayout(context) {
 
     private val colors = Theme.colors(context)
-    private var compactToggle: TextView? = null
     private var isCompact = false
+    private var menu: View? = null
     private val panelContainer = FrameLayout(context)
     private val autofillRow = LinearLayout(context).apply { orientation = HORIZONTAL }
     private val autofillStrip = HorizontalScrollView(context).apply {
@@ -76,20 +77,15 @@ class InputPanelView(
             tabs[mode] = tab
             strip.addView(tab)
         }
-        if (onSettingsClick != null) strip.addView(iconButton("⚙") { onSettingsClick.invoke() })
-        if (onOnePasswordClick != null) strip.addView(iconButton("🔑") { onOnePasswordClick.invoke() })
-        // Ayaneo's own system IME-switcher button lives in a strip tied to the real
-        // input method window's bounds/insets — since ours is deliberately 0x0 and
-        // untouchable (so it doesn't block the top screen), that whole strip never
-        // receives real touches for us, even though it does for a normal-sized IME
-        // like Gboard. This is our own guaranteed-to-work equivalent.
-        strip.addView(iconButton("⌨") { showInputMethodPicker() })
-        // Full screen or half, said out loud rather than inferred. Sharing the
-        // screen is only ever worth it when something is behind the keyboard,
-        // and only the user knows whether they want to see it.
-        compactToggle = iconButton(sizeToggleLabel()) { onToggleCompact?.invoke() }
-        strip.addView(compactToggle)
-        if (onHideClick != null) strip.addView(iconButton("⌄") { onHideClick.invoke() })
+        // One button instead of five. Every icon here costs width the mode tabs
+        // need, and the tabs are what get used; the rest live behind this.
+        //
+        // Changing keyboards is among them because Ayaneo's own system switcher
+        // lives in a strip tied to the real input method window's bounds, and
+        // ours is deliberately 0x0 and untouchable so it cannot block the top
+        // screen — that strip never receives touches for us the way it does for
+        // a normal-sized IME.
+        strip.addView(iconButton("⋮") { toggleMenu() })
         return strip
     }
 
@@ -107,7 +103,7 @@ class InputPanelView(
         setOnClickListener { onClick() }
     }
 
-    private fun showInputMethodPicker() {
+    fun showInputMethodPicker() {
         // The system picker dialog renders behind our own Presentation window on
         // this display (ours sits at a higher layer), so it'd open invisibly
         // underneath us — collapse out of the way first so it's actually visible.
@@ -195,13 +191,95 @@ class InputPanelView(
     /** Half-height while something else uses the screen, or full height. */
     fun setCompact(compact: Boolean) {
         isCompact = compact
-        compactToggle?.text = sizeToggleLabel()
+        // Rebuild an open menu so the size row names the right destination.
+        if (menu != null) showMenu()
     }
 
-    /**
-     * One glyph for both states, deliberately: the arrows that point the way it
-     * would go (U+2921/2922) are not in every system font, and a missing glyph
-     * renders as a box. The panel's own size already says which state it is in.
-     */
-    private fun sizeToggleLabel() = "↕"
+    // --- the overflow menu -------------------------------------------------
+
+    private fun toggleMenu() {
+        if (menu != null) hideMenu() else showMenu()
+    }
+
+    fun hideMenu() {
+        menu?.let { removeView(it) }
+        menu = null
+    }
+
+    private fun showMenu() {
+        hideMenu()
+        val density = resources.displayMetrics.density
+        val surface = colors.keySurface
+        val textColor = colors.keyText
+
+        val card = LinearLayout(context).apply {
+            orientation = VERTICAL
+            background = GradientDrawable().apply {
+                setColor(surface)
+                cornerRadius = 10 * density
+            }
+            val pad = (6 * density).toInt()
+            setPadding(pad, pad, pad, pad)
+            isClickable = true
+        }
+        for (item in PanelMenu.items(isCompact)) {
+            card.addView(menuRow(item, density, textColor))
+        }
+
+        // A scrim across the panel, so a tap anywhere else closes the menu
+        // instead of falling through and typing a letter.
+        // Six rows do not necessarily fit a half-height panel, and a menu whose
+        // last item is unreachable is worse than no menu.
+        val scroller = ScrollView(context).apply {
+            isFillViewport = false
+            isVerticalScrollBarEnabled = false
+            addView(card)
+        }
+
+        val scrim = FrameLayout(context).apply {
+            isClickable = true
+            setOnClickListener { hideMenu() }
+            addView(
+                scroller,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.END
+                ).apply {
+                    topMargin = (4 * density).toInt()
+                    rightMargin = (4 * density).toInt()
+                }
+            )
+        }
+        menu = scrim
+        addView(scrim, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    }
+
+    private fun menuRow(item: PanelMenuItem, density: Float, textColor: Int): View {
+        val row = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val padH = (10 * density).toInt()
+            val padV = (7 * density).toInt()
+            setPadding(padH, padV, (14 * density).toInt(), padV)
+            isClickable = true
+            setOnClickListener {
+                hideMenu()
+                onMenuAction?.invoke(item.id)
+            }
+        }
+        row.addView(TextView(context).apply {
+            text = item.icon
+            setTextColor(textColor)
+            textSize = 13f
+            width = (24 * density).toInt()
+            gravity = Gravity.CENTER
+        })
+        row.addView(TextView(context).apply {
+            text = item.label
+            setTextColor(textColor)
+            textSize = 12f
+        })
+        return row
+    }
 }

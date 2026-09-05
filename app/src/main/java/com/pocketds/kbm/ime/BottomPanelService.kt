@@ -179,6 +179,13 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
      *   hid it on, not to every field you touch afterwards.
      */
     fun expand() {
+        if (bottomPresentation?.isBlackedOut() == true) {
+            // The screen was turned off deliberately, to watch something on the
+            // other one. Focusing a field is not a reason to light it back up;
+            // a touch is, and that is what brings it back.
+            DebugLog.log("panel", "expand suppressed (screen is off)")
+            return
+        }
         if (manuallyCollapsedThisSession) {
             // Deliberately not cleared by a new focus session any more. It was,
             // on the reasoning that focusing a new field means you want the
