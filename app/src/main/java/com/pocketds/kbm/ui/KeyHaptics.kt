@@ -26,13 +26,24 @@ enum class HapticStrength(val stored: String, val label: String) {
  */
 object KeyHaptics {
 
-    /** The constant to feed [View.performHapticFeedback], or null for silence. */
+    /**
+     * The constant to feed [View.performHapticFeedback], or null for silence.
+     *
+     * Chosen by measuring what this device actually does with each, rather than
+     * by their names — on a handheld the feedback is forwarded to the rumble
+     * motors, so the difference is large:
+     *
+     *  * CLOCK_TICK   → a 10ms pulse. A tick.
+     *  * KEYBOARD_TAP → 50ms at 86% amplitude. A buzz.
+     *
+     * The keyboard-named one is the heavier of the two here, so light is the
+     * clock tick: 50ms under the palm on every letter is not what a good
+     * keyboard feels like.
+     */
     fun effectFor(strength: HapticStrength): Int? = when (strength) {
         HapticStrength.OFF -> null
-        // The system's own keyboard tick: what every other keyboard on the
-        // device feels like, which is the point.
-        HapticStrength.LIGHT -> HapticFeedbackConstants.KEYBOARD_TAP
-        HapticStrength.STRONG -> HapticFeedbackConstants.VIRTUAL_KEY
+        HapticStrength.LIGHT -> HapticFeedbackConstants.CLOCK_TICK
+        HapticStrength.STRONG -> HapticFeedbackConstants.KEYBOARD_TAP
     }
 
     fun perform(view: View, strength: HapticStrength) {
