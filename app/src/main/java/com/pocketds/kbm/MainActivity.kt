@@ -3,7 +3,6 @@ package com.pocketds.kbm
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
-import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -70,7 +69,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnOpenOnePassword).setOnClickListener {
-            openOnePasswordOnBottomScreen()
+            openOnePassword()
         }
 
         setUpCursorOptions()
@@ -159,21 +158,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openOnePasswordOnBottomScreen() {
-        // Prefer the panel service, which knows to get out of the way: it owns
-        // the whole bottom screen, so 1Password would otherwise open behind it.
-        BottomPanelService.instance?.let {
-            it.launchOnePassword()
-            return
-        }
-
-        // No panel running, so nothing is covering the bottom screen anyway.
-        val displayManager = getSystemService(DISPLAY_SERVICE) as DisplayManager
-        val secondaryDisplayId = displayManager.displays
-            .firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }?.displayId
-            ?: Display.DEFAULT_DISPLAY
-
-        launchOnePasswordOnDisplay(this, secondaryDisplayId)
+    /** The top screen: 1Password cannot unlock itself on the bottom one, where
+     * the system evicts its biometric prompt. See BottomPanelService. */
+    private fun openOnePassword() {
+        launchOnePasswordOnDisplay(this, Display.DEFAULT_DISPLAY)
     }
 
     override fun onResume() {

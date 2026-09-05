@@ -508,22 +508,21 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         bottomPresentation?.panel?.clearAutofillSuggestions()
     }
 
+    /**
+     * Opens 1Password on the *top* screen, deliberately.
+     *
+     * The bottom screen would be the obvious place, and it was — but 1Password
+     * can never unlock itself there. SystemUI destroys any biometric prompt
+     * whose app is not the top running task, and that task is read from the
+     * main screen, so a fingerprint prompt raised from the bottom one is
+     * evicted within about 30ms of appearing, untouched. Nothing on our side
+     * changes that; the app has to be where the system is looking.
+     *
+     * The keyboard stays up down here as a result, so a password can be copied
+     * above and pasted below without the panel moving at all.
+     */
     fun launchOnePassword() {
-        // A fresh lookup rather than the cached secondaryDisplayId, which can
-        // name a display that no longer exists — this device replaces the bottom
-        // one out from under us.
-        val displayId = findSecondaryDisplay()?.displayId ?: Display.DEFAULT_DISPLAY
-        val opened = launchOnePasswordOnDisplay(this, displayId) ?: return
-        if (displayId == Display.DEFAULT_DISPLAY) return
-
-        // It opened on the bottom screen, which our panel covers completely, so
-        // until we move it was running invisibly behind us. Collapsing to the
-        // bubble reveals it and leaves a way back: the bubble floats above it
-        // and taps back to the keyboard.
-        bottomScreenOccupant = opened
-        userTookScreenBack = false
-        DebugLog.log("panel", "handed the bottom screen to $opened, collapsing to the bubble")
-        collapse()
+        launchOnePasswordOnDisplay(this, Display.DEFAULT_DISPLAY)
     }
 
     private fun buildNotification(): Notification {

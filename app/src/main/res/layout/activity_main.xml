@@ -258,7 +258,9 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Android won't let a third-party app set another app as the autofill service for security reasons — that first step has to be done manually below. After that, 1Password's own autofill suggestions show up automatically wherever you're typing."
+            android:text="Android won't let a third-party app set another app as the autofill service for security reasons — that first step has to be done manually below. After that, 1Password's suggestions appear in a strip above the keys whenever you focus a login field.
+
+1Password opens on the top screen, not the bottom one. It cannot unlock itself down there: the system destroys any fingerprint prompt whose app isn't the top task, and it reads that from the top screen. The keyboard stays up while you look, so you can copy above and paste below."
             android:textSize="13sp" />
 
         <Button
@@ -273,7 +275,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Open 1Password on the bottom screen" />
+            android:text="Open 1Password" />
 
     </LinearLayout>
 
