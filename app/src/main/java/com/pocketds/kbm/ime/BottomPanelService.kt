@@ -20,6 +20,8 @@ import android.view.KeyEvent
 import com.pocketds.kbm.MainActivity
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
 import com.pocketds.kbm.debug.DebugLog
+import android.util.DisplayMetrics
+import android.util.Size
 import android.view.inputmethod.InlineSuggestion
 import androidx.annotation.RequiresApi
 import com.pocketds.kbm.launch.launchOnePasswordOnDisplay
@@ -379,17 +381,58 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
      * gets 1Password itself up on the bottom screen to browse/copy a credential.
      */
     /**
-     * Hands autofill suggestions to the panel. Returns whether they will be
-     * shown, which is what the framework asks.
+     * Shows autofill suggestions on the bottom screen, and says whether it will,
+     * which is what the framework asks.
      *
-     * A probe for now: it reports what arrives so we can find out whether the
-     * framework offers suggestions to an IME with no input view of its own,
-     * before building a strip that might never receive anything.
+     * This is the way out of 1Password and the keyboard fighting over one
+     * screen: with the credentials offered as chips above the keys, there is no
+     * reason to open 1Password there at all.
+     *
+     * Each suggestion is drawn by the autofill service in its own process and
+     * arrives asynchronously, so slots are laid out first and filled as they
+     * come — they need not arrive in order, and the best match is usually first.
      */
     @RequiresApi(Build.VERSION_CODES.R)
     fun showAutofillSuggestions(suggestions: List<InlineSuggestion>): Boolean {
-        DebugLog.log("autofill", "panel received ${suggestions.size} suggestion(s); nothing renders them yet")
-        return false
+        val panel = bottomPresentation?.panel ?: return false
+        if (suggestions.isEmpty()) {
+            panel.clearAutofillSuggestions()
+            return false
+        }
+
+        // Sized against the screen the chips actually appear on.
+        val stripWidth = panel.width.takeIf { it > 0 }
+            ?: findSecondaryDisplay()?.let { display ->
+                DisplayMetrics().also { @Suppress("DEPRECATION") display.getMetrics(it) }.widthPixels
+            }
+            ?: return false
+
+        val chipWidth = AutofillStripSpec.chipWidthPx(
+            stripWidthPx = stripWidth,
+            spacingPx = AutofillStripSpec.CHIP_SPACING_PX,
+            shown = suggestions.size,
+            minWidthPx = AutofillStripSpec.CHIP_MIN_WIDTH_PX,
+            maxWidthPx = stripWidth
+        )
+        panel.prepareAutofillSlots(suggestions.size, chipWidth, AutofillStripSpec.CHIP_HEIGHT_PX, AutofillStripSpec.CHIP_SPACING_PX)
+
+        val size = Size(chipWidth, AutofillStripSpec.CHIP_HEIGHT_PX)
+        suggestions.forEachIndexed { index, suggestion ->
+            suggestion.inflate(panel.context, size, mainExecutor) { view ->
+                if (view == null) {
+                    DebugLog.log("autofill", "suggestion $index would not draw")
+                } else {
+                    panel.fillAutofillSlot(index, view)
+                }
+            }
+        }
+        DebugLog.log("autofill", "showing ${suggestions.size} suggestion(s) at ${chipWidth}x$AutofillStripSpec.CHIP_HEIGHT_PX")
+        return true
+    }
+
+    /** Focus moved, so whatever was offered for the last field no longer applies. */
+    fun clearAutofillSuggestions() {
+        bottomPresentation?.panel?.clearAutofillSuggestions()
     }
 
     fun launchOnePassword() {

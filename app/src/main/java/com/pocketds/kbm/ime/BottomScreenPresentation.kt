@@ -459,4 +459,8 @@ class BottomScreenPresentation(
                 )
         }
     }
+
+    /** The autofill strip lives in the panel; the service drives it. */
+    val panel: InputPanelView?
+        get() = if (::inputPanelView.isInitialized) inputPanelView else null
 }

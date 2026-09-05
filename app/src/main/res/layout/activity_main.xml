@@ -42,7 +42,20 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:hint="Tap here, then open the keyboard to test typing" />
+            android:autofillHints="username"
+            android:inputType="text"
+            android:hint="Username - tap to test typing and autofill" />
+
+        <!-- A username/password pair, because autofill services key off the
+             password field: a lone text box is not recognisably a login. -->
+        <EditText
+            android:id="@+id/testPasswordField"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:autofillHints="password"
+            android:inputType="textPassword"
+            android:hint="Password - tap to test autofill suggestions" />
 
         <TextView
             android:layout_width="match_parent"

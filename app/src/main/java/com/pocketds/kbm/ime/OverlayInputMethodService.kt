@@ -48,11 +48,6 @@ class OverlayInputMethodService : InputMethodService() {
         var isInputViewActive = false
             private set
 
-        /** Chip sizing, in pixels on the bottom screen (1024x768, density 1.6). */
-        private const val CHIP_HEIGHT_PX = 72
-        private const val CHIP_MIN_WIDTH_PX = 180
-        private const val CHIP_SPACING_PX = 12
-        private const val MAX_SUGGESTIONS = 6
 
         // Some fields/apps fire onFinishInputView followed almost immediately
         // (~20-30ms) by a fresh onStartInputView, even though the field never
@@ -65,12 +60,17 @@ class OverlayInputMethodService : InputMethodService() {
         private const val COLLAPSE_DEBOUNCE_MS = 400L
     }
 
+    /** The bottom screen's width, measured once so the autofill request path
+     * has no work to do. */
+    private var stripWidthPx = 0
+
     private val collapseHandler = Handler(Looper.getMainLooper())
     private var pendingCollapse: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
         instance = this
+        stripWidthPx = measureBottomScreenWidthPx()
         DebugLog.log("ime", "service created")
     }
 
@@ -159,13 +159,16 @@ class OverlayInputMethodService : InputMethodService() {
             .build()
 
         // Sized against the bottom screen, which is where the chips appear —
-        // not the display this service's own resources describe.
+        // not the display this service's own resources describe. Measured at
+        // startup rather than here: the framework gives up on a slow IME
+        // ("Never received an InlineSuggestionsRequest") and the suggestions
+        // are simply lost, so this path stays free of lookups.
         val sizing = AutofillStripSpec.sizing(
-            stripWidthPx = bottomScreenWidthPx(),
-            chipHeightPx = CHIP_HEIGHT_PX,
-            spacingPx = CHIP_SPACING_PX,
-            minChipWidthPx = CHIP_MIN_WIDTH_PX,
-            maxSuggestions = MAX_SUGGESTIONS
+            stripWidthPx = stripWidthPx,
+            chipHeightPx = AutofillStripSpec.CHIP_HEIGHT_PX,
+            spacingPx = AutofillStripSpec.CHIP_SPACING_PX,
+            minChipWidthPx = AutofillStripSpec.CHIP_MIN_WIDTH_PX,
+            maxSuggestions = AutofillStripSpec.MAX_SUGGESTIONS
         )
 
         val spec = InlinePresentationSpec
@@ -183,7 +186,7 @@ class OverlayInputMethodService : InputMethodService() {
     }
 
     /** Falls back to this display's width if the bottom screen isn't there. */
-    private fun bottomScreenWidthPx(): Int {
+    private fun measureBottomScreenWidthPx(): Int {
         val displayManager = getSystemService(DISPLAY_SERVICE) as DisplayManager
         val bottom = displayManager.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }
             ?: return resources.displayMetrics.widthPixels
@@ -243,6 +246,8 @@ class OverlayInputMethodService : InputMethodService() {
 
     override fun onFinishInput() {
         super.onFinishInput()
+        // Whatever was offered belonged to the field that just went away.
+        BottomPanelService.instance?.clearAutofillSuggestions()
         isInputViewActive = false
         DebugLog.log("ime", "input finished, collapse in ${COLLAPSE_DEBOUNCE_MS}ms")
         val runnable = Runnable {

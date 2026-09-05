@@ -22,6 +22,15 @@ data class ChipSizing(
  */
 object AutofillStripSpec {
 
+    // Shared by the side that asks the framework for suggestions and the side
+    // that draws them. They have to agree: a chip inflated outside the size the
+    // request promised is outside what the autofill service agreed to render.
+    /** Roughly 45dp on the bottom screen's 1.6 density. */
+    const val CHIP_HEIGHT_PX = 72
+    const val CHIP_MIN_WIDTH_PX = 180
+    const val CHIP_SPACING_PX = 12
+    const val MAX_SUGGESTIONS = 6
+
     fun sizing(
         stripWidthPx: Int,
         chipHeightPx: Int,
@@ -43,5 +52,25 @@ object AutofillStripSpec {
             heightPx = chipHeightPx,
             count = count
         )
+    }
+
+    /**
+     * How wide to draw each chip, given how many actually arrived.
+     *
+     * They share the strip: one suggestion spans it, several divide it. Never
+     * below the minimum the framework was promised, since that is outside what
+     * the autofill service agreed to render.
+     */
+    fun chipWidthPx(
+        stripWidthPx: Int,
+        spacingPx: Int,
+        shown: Int,
+        minWidthPx: Int,
+        maxWidthPx: Int
+    ): Int {
+        if (shown <= 0) return 0
+        val gaps = spacingPx * (shown - 1)
+        val each = (stripWidthPx - gaps) / shown
+        return each.coerceIn(minWidthPx, maxWidthPx)
     }
 }

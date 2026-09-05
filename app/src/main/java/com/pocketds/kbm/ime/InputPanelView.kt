@@ -6,6 +6,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.pocketds.kbm.debug.DebugLog
@@ -32,6 +33,12 @@ class InputPanelView(
 
     private val colors = Theme.colors(context)
     private val panelContainer = FrameLayout(context)
+    private val autofillRow = LinearLayout(context).apply { orientation = HORIZONTAL }
+    private val autofillStrip = HorizontalScrollView(context).apply {
+        isHorizontalScrollBarEnabled = false
+        visibility = GONE
+        addView(autofillRow)
+    }
     private val tabs = mutableMapOf<InputMode, TextView>()
     private var activeMode = InputMode.KEYBOARD
 
@@ -39,6 +46,10 @@ class InputPanelView(
         orientation = VERTICAL
         setBackgroundColor(colors.background)
         addView(buildModeStrip())
+        // Between the tabs and the keys: close to what you are typing, and it
+        // pushes the keyboard down rather than covering it.
+        autofillStrip.setBackgroundColor(colors.stripBackground)
+        addView(autofillStrip, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(panelContainer, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
         showMode(InputMode.KEYBOARD)
     }
@@ -129,5 +140,47 @@ class InputPanelView(
             cornerRadius = 10f * resources.displayMetrics.density
             setColor(bg)
         }
+    }
+
+    // --- autofill suggestions ---------------------------------------------
+
+    /**
+     * Makes room for [count] suggestions, before any of them has been drawn.
+     *
+     * Each arrives on its own callback and they need not arrive in order, so
+     * every one gets its slot up front and drops into it — otherwise the
+     * best match could end up last.
+     */
+    fun prepareAutofillSlots(count: Int, chipWidthPx: Int, chipHeightPx: Int, spacingPx: Int) {
+        autofillRow.removeAllViews()
+        if (count <= 0) {
+            autofillStrip.visibility = GONE
+            return
+        }
+        repeat(count) { index ->
+            val slot = FrameLayout(context)
+            val params = LinearLayout.LayoutParams(chipWidthPx, chipHeightPx)
+            if (index > 0) params.leftMargin = spacingPx
+            autofillRow.addView(slot, params)
+        }
+        autofillStrip.visibility = VISIBLE
+        autofillStrip.scrollTo(0, 0)
+    }
+
+    fun fillAutofillSlot(index: Int, view: View) {
+        val slot = autofillRow.getChildAt(index) as? FrameLayout ?: return
+        slot.removeAllViews()
+        slot.addView(
+            view,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+    }
+
+    fun clearAutofillSuggestions() {
+        autofillRow.removeAllViews()
+        autofillStrip.visibility = GONE
     }
 }
