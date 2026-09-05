@@ -44,4 +44,7 @@ dependencies {
     // drag-and-release interaction never lands on a good feel; this exposes
     // damping and stiffness directly, which is what actually needs tuning.
     implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
+    // Inline autofill: builds the suggestion style the autofill service
+    // renders its chips with. The framework side is API 30+.
+    implementation("androidx.autofill:autofill:1.1.0")
 }

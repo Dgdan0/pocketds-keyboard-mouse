@@ -2,12 +2,23 @@ package com.pocketds.kbm.ime
 
 import android.content.Intent
 import android.os.Build
+import android.hardware.display.DisplayManager
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.util.DisplayMetrics
+import android.util.Size
+import android.view.Display
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InlineSuggestionsRequest
+import android.view.inputmethod.InlineSuggestionsResponse
+import android.widget.inline.InlinePresentationSpec
+import androidx.annotation.RequiresApi
+import androidx.autofill.inline.UiVersions
+import androidx.autofill.inline.v1.InlineSuggestionUi
 import androidx.core.content.ContextCompat
 import android.inputmethodservice.InputMethodService
 import com.pocketds.kbm.debug.DebugLog
@@ -36,6 +47,12 @@ class OverlayInputMethodService : InputMethodService() {
         // focus the whole time, so it should come back already expanded.
         var isInputViewActive = false
             private set
+
+        /** Chip sizing, in pixels on the bottom screen (1024x768, density 1.6). */
+        private const val CHIP_HEIGHT_PX = 72
+        private const val CHIP_MIN_WIDTH_PX = 180
+        private const val CHIP_SPACING_PX = 12
+        private const val MAX_SUGGESTIONS = 6
 
         // Some fields/apps fire onFinishInputView followed almost immediately
         // (~20-30ms) by a fresh onStartInputView, even though the field never
@@ -119,6 +136,70 @@ class OverlayInputMethodService : InputMethodService() {
      * field takes focus even if the app didn't explicitly request a keyboard —
      * which suits this app, where a focused field should mean a usable keyboard.
      */
+    /**
+     * Tells the framework we can show autofill suggestions, and how big they may
+     * be.
+     *
+     * 1Password is already the autofill service on this device, so the point of
+     * all this is that a login field on the top screen offers its credentials
+     * as chips on the bottom screen — no juggling 1Password and the keyboard for
+     * one screen.
+     *
+     * Whether this is even called is the open question: the framework hosts
+     * inline suggestions in the IME's input view, and we deliberately have none
+     * (the panel is a Presentation on the other display). Hence the trace line —
+     * it says plainly whether the framework offers us suggestions at all.
+     */
+    @RequiresApi(Build.VERSION_CODES.R)
+    override fun onCreateInlineSuggestionsRequest(uiExtras: Bundle): InlineSuggestionsRequest {
+        // build() hands back the Bundle the framework passes to the autofill
+        // service, which is what actually draws the chip.
+        val styles = UiVersions.newStylesBuilder()
+            .addStyle(InlineSuggestionUi.newStyleBuilder().build())
+            .build()
+
+        // Sized against the bottom screen, which is where the chips appear —
+        // not the display this service's own resources describe.
+        val sizing = AutofillStripSpec.sizing(
+            stripWidthPx = bottomScreenWidthPx(),
+            chipHeightPx = CHIP_HEIGHT_PX,
+            spacingPx = CHIP_SPACING_PX,
+            minChipWidthPx = CHIP_MIN_WIDTH_PX,
+            maxSuggestions = MAX_SUGGESTIONS
+        )
+
+        val spec = InlinePresentationSpec
+            .Builder(
+                Size(sizing.minWidthPx, sizing.heightPx),
+                Size(sizing.maxWidthPx, sizing.heightPx)
+            )
+            .setStyle(styles)
+            .build()
+
+        DebugLog.log("autofill", "asked for suggestions, offering room for ${sizing.count}")
+        return InlineSuggestionsRequest.Builder(listOf(spec))
+            .setMaxSuggestionCount(sizing.count)
+            .build()
+    }
+
+    /** Falls back to this display's width if the bottom screen isn't there. */
+    private fun bottomScreenWidthPx(): Int {
+        val displayManager = getSystemService(DISPLAY_SERVICE) as DisplayManager
+        val bottom = displayManager.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }
+            ?: return resources.displayMetrics.widthPixels
+        val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        bottom.getMetrics(metrics)
+        return metrics.widthPixels
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    override fun onInlineSuggestionsResponse(response: InlineSuggestionsResponse): Boolean {
+        val suggestions = response.inlineSuggestions
+        DebugLog.log("autofill", "${suggestions.size} suggestion(s) offered")
+        return BottomPanelService.instance?.showAutofillSuggestions(suggestions) ?: false
+    }
+
     override fun onStartInput(info: EditorInfo?, restarting: Boolean) {
         super.onStartInput(info, restarting)
         isInputViewActive = true

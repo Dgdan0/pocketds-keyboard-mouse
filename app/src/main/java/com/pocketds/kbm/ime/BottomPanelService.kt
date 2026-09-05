@@ -9,6 +9,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.database.ContentObserver
 import android.hardware.display.DisplayManager
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -19,6 +20,8 @@ import android.view.KeyEvent
 import com.pocketds.kbm.MainActivity
 import com.pocketds.kbm.accessibility.CursorAccessibilityService
 import com.pocketds.kbm.debug.DebugLog
+import android.view.inputmethod.InlineSuggestion
+import androidx.annotation.RequiresApi
 import com.pocketds.kbm.launch.launchOnePasswordOnDisplay
 import com.pocketds.kbm.layout.InputMode
 import com.pocketds.kbm.settings.ScrollSettings
@@ -375,6 +378,20 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
      * letting any app silently redirect autofill would be a security hole. This just
      * gets 1Password itself up on the bottom screen to browse/copy a credential.
      */
+    /**
+     * Hands autofill suggestions to the panel. Returns whether they will be
+     * shown, which is what the framework asks.
+     *
+     * A probe for now: it reports what arrives so we can find out whether the
+     * framework offers suggestions to an IME with no input view of its own,
+     * before building a strip that might never receive anything.
+     */
+    @RequiresApi(Build.VERSION_CODES.R)
+    fun showAutofillSuggestions(suggestions: List<InlineSuggestion>): Boolean {
+        DebugLog.log("autofill", "panel received ${suggestions.size} suggestion(s); nothing renders them yet")
+        return false
+    }
+
     fun launchOnePassword() {
         // A fresh lookup rather than the cached secondaryDisplayId, which can
         // name a display that no longer exists — this device replaces the bottom
