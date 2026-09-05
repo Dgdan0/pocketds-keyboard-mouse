@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.widget.Button
 import android.widget.LinearLayout
+import com.pocketds.kbm.gesture.HorizontalStepper
 import com.pocketds.kbm.settings.HapticSettings
 import com.pocketds.kbm.ui.KeyHaptics
 import com.pocketds.kbm.ui.KeyStyler
@@ -22,6 +23,8 @@ fun buildRepeatingBackspaceKey(
     context: Context,
     colors: PocketColors,
     weight: Float,
+    onDeleteWord: () -> Unit = {},
+    // Last so that call sites can keep passing it as a trailing lambda.
     onDeleteChars: (Int) -> Unit
 ): Button {
     val handler = Handler(Looper.getMainLooper())
@@ -31,6 +34,11 @@ fun buildRepeatingBackspaceKey(
     // and gated, since a held backspace repeats up to 25 times a second and
     // buzzing on each is a rattle rather than feedback.
     val hapticGate = KeyHaptics.RepeatGate()
+    val density = context.resources.displayMetrics.density
+    val wordSwipe = HorizontalStepper(
+        pxPerStep = WORD_SWIPE_STEP_DP * density,
+        slopPx = WORD_SWIPE_SLOP_DP * density
+    )
     lateinit var key: Button
 
     val tick = object : Runnable {
@@ -61,12 +69,23 @@ fun buildRepeatingBackspaceKey(
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     repeatCount = 0
+                    wordSwipe.down(event.rawX)
                     hapticGate.release()
                     if (hapticGate.allow(SystemClock.uptimeMillis())) {
                         KeyHaptics.perform(this, HapticSettings.strength(context))
                     }
                     onDeleteChars(1)
                     handler.postDelayed(tick, INITIAL_DELAY_MS)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    // Dragging left off backspace deletes whole words. Any drag
+                    // also stops the character repeat: once it is a swipe the
+                    // finger is not holding the key down any more, and leaving
+                    // the repeat running would eat the line behind the words.
+                    val steps = wordSwipe.move(event.rawX)
+                    if (wordSwipe.didStep()) handler.removeCallbacks(tick)
+                    repeat(-steps.coerceAtMost(0)) { onDeleteWord() }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -83,6 +102,11 @@ fun buildRepeatingBackspaceKey(
         setOnClickListener { }
     }
 }
+
+/** Far enough that a wobble while holding to repeat cannot turn into a word
+ * delete, since the two gestures live on the same key. */
+private const val WORD_SWIPE_SLOP_DP = 24f
+private const val WORD_SWIPE_STEP_DP = 34f
 
 private const val INITIAL_DELAY_MS = 400L
 private const val MIN_INTERVAL_MS = 40L

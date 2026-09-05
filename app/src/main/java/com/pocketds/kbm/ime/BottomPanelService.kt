@@ -28,6 +28,7 @@ import androidx.annotation.RequiresApi
 import com.pocketds.kbm.launch.launchOnePasswordOnDisplay
 import com.pocketds.kbm.layout.InputMode
 import com.pocketds.kbm.settings.ScrollSettings
+import com.pocketds.kbm.text.WordDelete
 
 /**
  * Owns the bottom-screen Presentation for the lifetime of the app, independent of
@@ -75,6 +76,10 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
 
         /** Long enough for a launch to settle, short enough not to be seen. */
         private const val WINDOW_SETTLE_MS = 250L
+
+        /** Enough context to find a word boundary without hauling back a whole
+         * document on every swipe. */
+        private const val WORD_LOOKBACK_CHARS = 128
     }
 
     private val defaultImeObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
@@ -588,6 +593,26 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
 
     override fun onSpace() {
         OverlayInputMethodService.instance?.currentInputConnection?.commitText(" ", 1)
+    }
+
+    override fun onCursorStep(steps: Int) {
+        val ic = OverlayInputMethodService.instance?.currentInputConnection ?: return
+        val key = if (steps < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+        // Arrow keys rather than setSelection: they land correctly in a web page
+        // or a list, where selection offsets mean nothing to the other side.
+        repeat(kotlin.math.abs(steps)) {
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, key))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, key))
+        }
+    }
+
+    override fun onDeleteWord() {
+        val ic = OverlayInputMethodService.instance?.currentInputConnection ?: return
+        // There is no "delete a word" to ask for, so read back what is there and
+        // work out how much of it a word accounts for.
+        val before = ic.getTextBeforeCursor(WORD_LOOKBACK_CHARS, 0) ?: return
+        val count = WordDelete.charsBefore(before)
+        if (count > 0) ic.deleteSurroundingText(count, 0)
     }
 
     // --- TrackpadPanel.Listener ---

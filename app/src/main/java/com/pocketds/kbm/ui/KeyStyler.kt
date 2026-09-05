@@ -59,11 +59,17 @@ object KeyStyler {
     @SuppressLint("ClickableViewAccessibility")
     fun attachPressHaptic(view: View) {
         view.setOnTouchListener { v, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                KeyHaptics.perform(v, HapticSettings.strength(v.context))
-            }
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) pressFeedback(v)
             false
         }
+    }
+
+    /**
+     * The press tick, for keys that install their own touch handling and so
+     * replace the listener [attachPressHaptic] would have set.
+     */
+    fun pressFeedback(view: View) {
+        KeyHaptics.perform(view, HapticSettings.strength(view.context))
     }
 
     /** Margin every key row should apply between its buttons, in a LinearLayout.LayoutParams. */

@@ -1,12 +1,15 @@
 package com.pocketds.kbm.ime
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import com.pocketds.kbm.gesture.HorizontalStepper
 import com.pocketds.kbm.ui.KeyStyler
 import com.pocketds.kbm.ui.Theme
 
@@ -25,10 +28,20 @@ class KeyboardPanel(context: Context, private val listener: Listener) : LinearLa
         fun onBackspace(count: Int = 1)
         fun onEnter()
         fun onSpace()
+
+        /** Walk the text cursor, from dragging along the spacebar. */
+        fun onCursorStep(steps: Int) {}
+
+        /** Delete a whole word, from dragging left off backspace. */
+        fun onDeleteWord() {}
     }
 
     companion object {
         private const val DOUBLE_TAP_MS = 350L
+        /** One character per this much travel: close to a finger's own sense of
+         * moving through text rather than scrubbing. */
+        private const val CURSOR_STEP_DP = 11f
+        private const val SWIPE_SLOP_DP = 8f
         private val TOP_ROW = listOf(
             'q' to '1', 'w' to '2', 'e' to '3', 'r' to '4', 't' to '5',
             'y' to '6', 'u' to '7', 'i' to '8', 'o' to '9', 'p' to '0'
@@ -125,7 +138,10 @@ class KeyboardPanel(context: Context, private val listener: Listener) : LinearLa
             letterButtons.add(button)
             row.addView(button)
         }
-        val backspace = buildRepeatingBackspaceKey(context, colors, weight = 1.5f) { count -> listener.onBackspace(count) }
+        val backspace = buildRepeatingBackspaceKey(
+            context, colors, weight = 1.5f,
+            onDeleteWord = { listener.onDeleteWord() }
+        ) { count -> listener.onBackspace(count) }
         backspaceButton = backspace
         row.addView(backspace)
         return row
@@ -145,7 +161,10 @@ class KeyboardPanel(context: Context, private val listener: Listener) : LinearLa
         for (c in SYMBOLS_ROW_3) {
             row.addView(keyButton(c.toString()) { listener.onChar(c.toString()) })
         }
-        val backspace = buildRepeatingBackspaceKey(context, colors, weight = 1.5f) { count -> listener.onBackspace(count) }
+        val backspace = buildRepeatingBackspaceKey(
+            context, colors, weight = 1.5f,
+            onDeleteWord = { listener.onDeleteWord() }
+        ) { count -> listener.onBackspace(count) }
         backspaceButton = backspace
         row.addView(backspace)
         return row
@@ -158,6 +177,7 @@ class KeyboardPanel(context: Context, private val listener: Listener) : LinearLa
             if (onSymbolsPage) showLettersPage() else showSymbolsPage()
         }
         val space = keyButton("Space", weight = 5.5f) { listener.onSpace() }
+        attachCursorSwipe(space)
         val enter = keyButton("Enter", weight = 1.7f, accent = true) { listener.onEnter() }
         row.addView(toggle)
         row.addView(space)
@@ -192,6 +212,49 @@ class KeyboardPanel(context: Context, private val listener: Listener) : LinearLa
     private fun applyCase() {
         val upper = isUpper()
         letterButtons.forEach { it.text = if (upper) it.text.toString().uppercase() else it.text.toString().lowercase() }
+    }
+
+    /**
+     * Dragging along the spacebar walks the text cursor.
+     *
+     * Placing a caret in a field on the *other* screen is the fiddliest thing
+     * this keyboard asks of you — the default layout has no arrow keys, and the
+     * pointer is a whole mode switch away.
+     *
+     * The drag must cancel the space: nobody means to type one at the end of
+     * moving the cursor.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun attachCursorSwipe(space: Button) {
+        val density = resources.displayMetrics.density
+        val stepper = HorizontalStepper(
+            pxPerStep = CURSOR_STEP_DP * density,
+            slopPx = SWIPE_SLOP_DP * density
+        )
+        space.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    stepper.down(event.rawX)
+                    KeyStyler.pressFeedback(v)
+                    false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val steps = stepper.move(event.rawX)
+                    if (steps != 0) listener.onCursorStep(steps)
+                    false
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (stepper.didStep()) {
+                        // Swallow the click so no space is typed.
+                        v.isPressed = false
+                        true
+                    } else {
+                        false
+                    }
+                }
+                else -> false
+            }
+        }
     }
 
     private fun keyButton(
