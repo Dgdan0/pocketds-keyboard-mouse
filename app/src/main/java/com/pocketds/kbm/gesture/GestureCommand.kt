@@ -13,4 +13,10 @@ sealed interface GestureCommand {
     data object ScrollEnd : GestureCommand
     data object LeftClick : GestureCommand
     data object RightClick : GestureCommand
+
+    /** Press and hold at the cursor: the start of dragging out a text selection. */
+    data object DragStart : GestureCommand
+
+    /** Let go, ending a selection drag. */
+    data object DragEnd : GestureCommand
 }

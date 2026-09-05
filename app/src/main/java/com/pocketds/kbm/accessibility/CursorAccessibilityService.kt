@@ -19,6 +19,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.pocketds.kbm.debug.DebugLog
+import com.pocketds.kbm.gesture.ReleaseFlick
 import com.pocketds.kbm.ime.BottomPanelService
 import com.pocketds.kbm.settings.CursorSettings
 import com.pocketds.kbm.settings.ThemeSettings
@@ -92,6 +93,23 @@ class CursorAccessibilityService : AccessibilityService() {
     private var scrollGeneration = 0
     private var scrollSessionActive = false
     private var scrollDispatchInFlight = false
+
+    /** The last movement dispatched, and when — the release reads these to work
+     * out how fast the finger was going as it let go. */
+    /** A selection drag is in progress, so cursor movement drags the held
+     * finger along instead of only moving the pointer. */
+    private var dragging = false
+
+    /**
+     * A selection must not coast. Scrolling wants the throw carried through the
+     * release; a drag that flung on lift would run the selection past wherever
+     * the finger actually stopped.
+     */
+    private var suppressFlick = false
+
+    private var lastSegmentDx = 0f
+    private var lastSegmentDy = 0f
+    private var lastSegmentAt = 0L
     private var scrollFingerDown = false
     private var scrollNeedsReanchor = false
     private var scrollStroke: GestureDescription.StrokeDescription? = null
@@ -126,6 +144,10 @@ class CursorAccessibilityService : AccessibilityService() {
         /** Just long enough to register as a tap, short enough to be unnoticed. */
         private const val CARET_TAP_MS = 40L
         private const val SCROLL_SEGMENT_DURATION_MS = 40L
+        /** How long the finger keeps moving as it lifts. Long enough for the
+         * velocity to be read, short enough not to be felt as extra travel. */
+        private const val FLICK_DURATION_MS = 40L
+        private const val FLICK_MAX_PX = 400f
         // The initial "fingers touch down" stroke — short, since nothing should
         // visibly happen until the first real movement extends it.
         private const val SCROLL_TOUCH_DOWN_MS = 20L
@@ -253,11 +275,18 @@ class CursorAccessibilityService : AccessibilityService() {
 
     fun moveCursorBy(dx: Float, dy: Float) {
         onCursorActivity()
+        val fromX = cursorX
+        val fromY = cursorY
         cursorX = clamp(cursorX + dx, 0f, screenWidth.toFloat())
         cursorY = clamp(cursorY + dy, 0f, screenHeight.toFloat())
         cursorParams.x = cursorX.toInt()
         cursorParams.y = cursorY.toInt()
         windowManager.updateViewLayout(cursorView, cursorParams)
+
+        // While selecting, the held finger goes with the pointer. Sent as the
+        // distance actually travelled rather than the requested delta, so the
+        // finger cannot drift away from the arrow at the edges of the screen.
+        if (dragging) scrollBy(cursorX - fromX, cursorY - fromY)
     }
 
     fun click() {
@@ -441,6 +470,33 @@ class CursorAccessibilityService : AccessibilityService() {
         pumpScroll()
     }
 
+    /**
+     * Press and hold at the cursor, so moving it drags out a text selection.
+     *
+     * Built on the scroll machinery rather than beside it: a held finger being
+     * dragged is exactly what a scroll already is, and two of those on one
+     * screen would fight over the same synthetic pointer. The only difference
+     * is which way the finger goes — a scroll moves opposite the fingers, a
+     * selection follows the cursor.
+     */
+    fun beginDrag() {
+        onCursorActivity()
+        if (dragging) return
+        dragging = true
+        DebugLog.log("cursor", "drag started, selecting from the cursor")
+        beginScrollSession()
+        // After the session starts, which clears it.
+        suppressFlick = true
+        pumpScroll()
+    }
+
+    fun endDrag() {
+        if (!dragging) return
+        dragging = false
+        DebugLog.log("cursor", "drag ended")
+        endScroll()
+    }
+
     /** The real fingers left the trackpad: lift the synthetic one, so the next
      * scrollBy() starts a fresh drag anchored back on the cursor. */
     fun endScroll() {
@@ -455,6 +511,9 @@ class CursorAccessibilityService : AccessibilityService() {
         // drag belongs to a dead session now, and its callbacks must not touch
         // the state being set up here.
         scrollGeneration++
+        // Speed from the previous drag would otherwise fling this one on lift.
+        clearSegmentVelocity()
+        suppressFlick = false
         scrollSessionActive = true
         scrollFingerDown = false
         scrollNeedsReanchor = false
@@ -573,6 +632,10 @@ class CursorAccessibilityService : AccessibilityService() {
             return
         }
 
+        lastSegmentDx = endX - startX
+        lastSegmentDy = endY - startY
+        lastSegmentAt = SystemClock.uptimeMillis()
+
         scrollX = endX
         scrollY = endY
 
@@ -632,9 +695,29 @@ class CursorAccessibilityService : AccessibilityService() {
         }
 
         val generation = scrollGeneration
-        val end = stroke.continueStroke(
-            Path().apply { moveTo(scrollX, scrollY) }, 0, 1L, false
+        // Keep moving through the release when the finger was still going.
+        // Ending on a stationary segment hands the app a release velocity of
+        // zero, and its fling never triggers — which is why scrolling stopped
+        // dead the instant you lifted. Letting the app fling is better than
+        // simulating decay here: it matches whatever that app already does.
+        val flick = if (reanchor || suppressFlick) null else ReleaseFlick.segment(
+            lastDx = lastSegmentDx,
+            lastDy = lastSegmentDy,
+            segmentMs = SCROLL_SEGMENT_DURATION_MS,
+            ageMs = SystemClock.uptimeMillis() - lastSegmentAt,
+            flickMs = FLICK_DURATION_MS,
+            maxPx = FLICK_MAX_PX
         )
+        val endPath = Path().apply {
+            moveTo(scrollX, scrollY)
+            if (flick != null) {
+                lineTo(
+                    clamp(scrollX + flick.dx, SCROLL_EDGE_MARGIN_PX, screenWidth - SCROLL_EDGE_MARGIN_PX),
+                    clamp(scrollY + flick.dy, SCROLL_EDGE_MARGIN_PX, screenHeight - SCROLL_EDGE_MARGIN_PX)
+                )
+            }
+        }
+        val end = stroke.continueStroke(endPath, 0, flick?.durationMs ?: 1L, false)
         if (reanchor) anchorScrollPointer()
 
         scrollDispatchInFlight = true
@@ -662,6 +745,7 @@ class CursorAccessibilityService : AccessibilityService() {
     /** Gesture dispatch fell over — drop the whole drag rather than trying to
      * continue from a stroke the system has already torn down. */
     private fun abandonScroll() {
+        clearSegmentVelocity()
         scrollSessionActive = false
         scrollFingerDown = false
         scrollNeedsReanchor = false
@@ -700,6 +784,13 @@ class CursorAccessibilityService : AccessibilityService() {
      */
     private fun markSyntheticDispatch(durationMs: Long = 0L) {
         lastSyntheticDispatchAt = SystemClock.uptimeMillis() + durationMs
+    }
+
+    /** So a new scroll cannot fling on the back of the previous one's speed. */
+    private fun clearSegmentVelocity() {
+        lastSegmentDx = 0f
+        lastSegmentDy = 0f
+        lastSegmentAt = 0L
     }
 
     private fun clamp(value: Float, minVal: Float, maxVal: Float) = max(minVal, min(maxVal, value))

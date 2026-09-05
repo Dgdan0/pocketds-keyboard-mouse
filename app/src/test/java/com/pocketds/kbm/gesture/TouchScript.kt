@@ -18,7 +18,8 @@ class TouchScript(
     /** Everything emitted so far, for assertions about a whole gesture. */
     val all = mutableListOf<GestureCommand>()
 
-    fun down(x: Float, y: Float, id: Int = 0): List<GestureCommand> {
+    fun down(x: Float, y: Float, id: Int = 0, afterMs: Long = 0L): List<GestureCommand> {
+        advance(afterMs)
         down.clear()
         down += Pointer(id, x, y)
         return feed(TouchAction.DOWN, id)
@@ -77,6 +78,13 @@ class TouchScript(
         down.clear()
         down += Pointer(id, x, y)
         return feed(TouchAction.MOVE, NO_POINTER)
+    }
+
+    /** The surface was torn down mid-gesture. */
+    fun reset(): List<GestureCommand> {
+        val commands = recognizer.reset()
+        all += commands
+        return commands
     }
 
     private fun replace(pointer: Pointer) {

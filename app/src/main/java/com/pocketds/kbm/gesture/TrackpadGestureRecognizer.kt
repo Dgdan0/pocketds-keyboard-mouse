@@ -52,6 +52,17 @@ class TrackpadGestureRecognizer(private val config: GestureConfig = GestureConfi
     private var scrollLatched = false
     private var didEmitScroll = false
 
+    /** When and where the last tap lifted, so a press that follows it closely
+     * can be recognised as the second half of a double tap. */
+    private var lastTapUpMs: Long? = null
+    private var lastTapUpX = 0f
+    private var lastTapUpY = 0f
+
+    /** This press followed a tap closely enough that holding and moving it
+     * should drag out a selection rather than push the pointer. */
+    private var couldDrag = false
+    private var dragging = false
+
     private var pendingScrollDx = 0f
     private var pendingScrollDy = 0f
     private var scrollGateOpen = false
@@ -71,7 +82,11 @@ class TrackpadGestureRecognizer(private val config: GestureConfig = GestureConfi
      * this, a panel dismissed while scrolling leaves the synthetic finger
      * pressed on the other screen. */
     fun reset(): List<GestureCommand> {
-        val commands = if (scrollLatched && didEmitScroll) listOf(GestureCommand.ScrollEnd) else emptyList()
+        val commands = when {
+            dragging -> listOf(GestureCommand.DragEnd)
+            scrollLatched && didEmitScroll -> listOf(GestureCommand.ScrollEnd)
+            else -> emptyList()
+        }
         clear()
         return commands
     }
@@ -87,11 +102,21 @@ class TrackpadGestureRecognizer(private val config: GestureConfig = GestureConfi
         downY = pointer.y
         gestureStartMs = sample.eventTimeMs
         maxPointerCount = sample.pointerCount
+        // Close on the heels of a tap, and in the same place: this may be the
+        // hold half of double-tap-and-drag. Only "may" — released without
+        // moving it is simply the second click of a double click, and that has
+        // to keep working.
+        val sinceTap = lastTapUpMs?.let { sample.eventTimeMs - it }
+        couldDrag = sinceTap != null &&
+            sinceTap <= config.doubleTapMs &&
+            hypot(pointer.x - lastTapUpX, pointer.y - lastTapUpY) <= config.tapSlopPx
         return emptyList()
     }
 
     private fun onPointerDown(sample: TouchSample): List<GestureCommand> {
         maxPointerCount = max(maxPointerCount, sample.pointerCount)
+        // A thumb resting mid-selection must not turn the drag into a scroll.
+        if (dragging) return emptyList()
         // Once a second finger lands this is a scroll gesture, even if a finger
         // lifts again later.
         scrollLatched = true
@@ -135,12 +160,17 @@ class TrackpadGestureRecognizer(private val config: GestureConfig = GestureConfi
         maxExcursionPx = max(maxExcursionPx, hypot(tracked.x - downX, tracked.y - downY))
 
         if (!scrollLatched) {
-            return listOf(
-                GestureCommand.MoveCursor(
-                    dx = rawDx * config.cursorSensitivity,
-                    dy = rawDy * config.cursorSensitivity
-                )
+            val move = GestureCommand.MoveCursor(
+                dx = rawDx * config.cursorSensitivity,
+                dy = rawDy * config.cursorSensitivity
             )
+            if (couldDrag && !dragging) {
+                dragging = true
+                // Before the movement, not after: press first, or the first
+                // stretch of the selection is dragged with nothing held down.
+                return listOf(GestureCommand.DragStart, move)
+            }
+            return listOf(move)
         }
 
         // Accumulate rather than discard, so opening the gate loses no travel.
@@ -187,6 +217,19 @@ class TrackpadGestureRecognizer(private val config: GestureConfig = GestureConfi
         val wasBrief = durationMs <= config.tapMaxDurationMs
         val stayedPut = maxExcursionPx <= config.tapSlopPx
 
+        if (dragging) {
+            // No click on the way out: it would collapse the selection just made.
+            clear()
+            return listOf(GestureCommand.DragEnd)
+        }
+        // Remember a completed tap, so a press that follows it can tell it is
+        // the second of a pair.
+        if (!scrollLatched && wasBrief && stayedPut) {
+            lastTapUpMs = sample.eventTimeMs
+            lastTapUpX = lastX
+            lastTapUpY = lastY
+        }
+
         val commands = when {
             scrollLatched -> {
                 // Only close a scroll that actually started. Ending one that
@@ -222,7 +265,11 @@ class TrackpadGestureRecognizer(private val config: GestureConfig = GestureConfi
     private fun onCancel(): List<GestureCommand> {
         // Never turns into a click: a cancelled touch is one the system took
         // away, not one the user completed.
-        val commands = if (scrollLatched && didEmitScroll) listOf(GestureCommand.ScrollEnd) else emptyList()
+        val commands = when {
+            dragging -> listOf(GestureCommand.DragEnd)
+            scrollLatched && didEmitScroll -> listOf(GestureCommand.ScrollEnd)
+            else -> emptyList()
+        }
         clear()
         return commands
     }
@@ -242,6 +289,10 @@ class TrackpadGestureRecognizer(private val config: GestureConfig = GestureConfi
         maxPointerCount = 0
         scrollLatched = false
         didEmitScroll = false
+        // Deliberately not lastTapUp*: that is what the *next* gesture reads to
+        // know it is the second of a pair.
+        couldDrag = false
+        dragging = false
         scrollGateOpen = false
         pendingScrollDx = 0f
         pendingScrollDy = 0f

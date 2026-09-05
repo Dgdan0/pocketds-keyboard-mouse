@@ -70,6 +70,8 @@ class TrackpadTouchAdapter(
                 GestureCommand.ScrollEnd -> listener.onScrollEnd()
                 GestureCommand.LeftClick -> listener.onLeftClick()
                 GestureCommand.RightClick -> listener.onRightClick()
+                GestureCommand.DragStart -> listener.onDragStart()
+                GestureCommand.DragEnd -> listener.onDragEnd()
             }
         }
     }

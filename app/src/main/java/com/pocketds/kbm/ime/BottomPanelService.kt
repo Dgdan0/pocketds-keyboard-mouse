@@ -621,12 +621,23 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         CursorAccessibilityService.instance?.moveCursorBy(dx, dy)
     }
 
+    /** Selecting text is the same drag machinery the scroll uses: a finger held
+     * down and dragged. The difference is only that it follows the cursor. */
+
     override fun onLeftClick() {
         CursorAccessibilityService.instance?.click()
     }
 
     override fun onRightClick() {
         CursorAccessibilityService.instance?.rightClick()
+    }
+
+    override fun onDragStart() {
+        CursorAccessibilityService.instance?.beginDrag()
+    }
+
+    override fun onDragEnd() {
+        CursorAccessibilityService.instance?.endDrag()
     }
 
     override fun onScroll(dx: Float, dy: Float) {

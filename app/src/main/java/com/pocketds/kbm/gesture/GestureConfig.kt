@@ -38,7 +38,12 @@ data class GestureConfig(
      * at once. It only has to outlast the pixel or two of jitter from two
      * fingers touching down, so a few pixels is enough to stay invisible.
      */
-    val scrollStartSlopPx: Float = 3f
+    val scrollStartSlopPx: Float = 3f,
+    /**
+     * How soon a second press has to follow the first to count as a double tap
+     * — and so, if it is then held and dragged, as the start of a selection.
+     */
+    val doubleTapMs: Long = 320L
 ) {
     companion object {
         val DEFAULT = GestureConfig()
