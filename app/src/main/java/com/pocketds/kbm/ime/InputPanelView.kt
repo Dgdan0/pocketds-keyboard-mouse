@@ -28,10 +28,13 @@ class InputPanelView(
     private val onOnePasswordClick: (() -> Unit)? = null,
     private val onModeChanged: ((InputMode) -> Unit)? = null,
     private val onHideClick: (() -> Unit)? = null,
-    private val onCollapseForPicker: (() -> Unit)? = null
+    private val onCollapseForPicker: (() -> Unit)? = null,
+    private val onToggleCompact: (() -> Unit)? = null
 ) : LinearLayout(context) {
 
     private val colors = Theme.colors(context)
+    private var compactToggle: TextView? = null
+    private var isCompact = false
     private val panelContainer = FrameLayout(context)
     private val autofillRow = LinearLayout(context).apply { orientation = HORIZONTAL }
     private val autofillStrip = HorizontalScrollView(context).apply {
@@ -81,6 +84,11 @@ class InputPanelView(
         // receives real touches for us, even though it does for a normal-sized IME
         // like Gboard. This is our own guaranteed-to-work equivalent.
         strip.addView(iconButton("⌨") { showInputMethodPicker() })
+        // Full screen or half, said out loud rather than inferred. Sharing the
+        // screen is only ever worth it when something is behind the keyboard,
+        // and only the user knows whether they want to see it.
+        compactToggle = iconButton(sizeToggleLabel()) { onToggleCompact?.invoke() }
+        strip.addView(compactToggle)
         if (onHideClick != null) strip.addView(iconButton("⌄") { onHideClick.invoke() })
         return strip
     }
@@ -183,4 +191,17 @@ class InputPanelView(
         autofillRow.removeAllViews()
         autofillStrip.visibility = GONE
     }
+
+    /** Half-height while something else uses the screen, or full height. */
+    fun setCompact(compact: Boolean) {
+        isCompact = compact
+        compactToggle?.text = sizeToggleLabel()
+    }
+
+    /**
+     * One glyph for both states, deliberately: the arrows that point the way it
+     * would go (U+2921/2922) are not in every system font, and a missing glyph
+     * renders as a box. The panel's own size already says which state it is in.
+     */
+    private fun sizeToggleLabel() = "↕"
 }

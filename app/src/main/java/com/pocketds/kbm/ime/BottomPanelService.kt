@@ -225,10 +225,8 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
                 return
             }
         }
-        DebugLog.log("panel", "expand -> mode=$currentMode compact=${bottomScreenOccupant != null}")
+        DebugLog.log("panel", "expand -> mode=$currentMode")
         panelExpanded = true
-        // Only take the whole screen when nothing else is using it.
-        bottomPresentation?.compact = bottomScreenOccupant != null
         bottomPresentation?.setExpanded(true)
         updateCursorVisibility(currentMode)
     }
@@ -467,7 +465,6 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
             OccupancyChange.TAKEN -> {
                 bottomScreenOccupant = occupant
                 userTookScreenBack = false
-                bottomPresentation?.compact = true
                 DebugLog.log("panel", "$occupant took the bottom screen, standing down to the bubble")
                 collapse()
             }
@@ -475,6 +472,7 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
                 DebugLog.log("panel", "$bottomScreenOccupant left the bottom screen")
                 bottomScreenOccupant = null
                 userTookScreenBack = false
+                // Nothing left behind the keyboard to make room for.
                 bottomPresentation?.compact = false
             }
             OccupancyChange.UNCHANGED -> Unit
@@ -536,6 +534,10 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         // keyboard means wanting both at once.
         bottomScreenOccupant = opened
         userTookScreenBack = true
+        // The one place the shape is chosen for the user: asking for 1Password
+        // from the keyboard means wanting to see both. The strip's size button
+        // flips it back.
+        bottomPresentation?.compact = true
         DebugLog.log("panel", "$opened opened below, keyboard going compact")
         expand()
     }

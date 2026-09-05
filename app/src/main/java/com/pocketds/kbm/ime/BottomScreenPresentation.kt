@@ -8,6 +8,7 @@ import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
 import android.view.Display
+import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
@@ -178,8 +179,10 @@ class BottomScreenPresentation(
             onCollapseForPicker = {
                 setExpanded(false)
                 onTemporaryCollapse?.invoke()
-            }
+            },
+            onToggleCompact = { compact = !compact }
         )
+        inputPanelView.setCompact(compact)
 
         val root = FrameLayout(context).apply {
             addView(
@@ -250,6 +253,7 @@ class BottomScreenPresentation(
         set(value) {
             if (field == value) return
             field = value
+            if (::inputPanelView.isInitialized) inputPanelView.setCompact(value)
             if (state == PanelState.EXPANDED) applyWindowGeometry(sizeChanged = true)
         }
 
@@ -395,7 +399,13 @@ class BottomScreenPresentation(
                     // Something else is using this screen, so take only the
                     // lower part of it and leave that app visible above —
                     // the way a phone keyboard shares a screen with an app.
-                    val screenHeight = context.resources.displayMetrics.heightPixels
+                    // The *real* height. displayMetrics stops short of the
+                    // navigation bar, which left a strip of the app showing
+                    // below the keys instead of the keyboard reaching the
+                    // bottom edge.
+                    val screenHeight = DisplayMetrics()
+                        .also { @Suppress("DEPRECATION") display.getRealMetrics(it) }
+                        .heightPixels
                     val height = CompactPanelHeight.forDisplay(
                         displayHeightPx = screenHeight,
                         fraction = COMPACT_FRACTION,
