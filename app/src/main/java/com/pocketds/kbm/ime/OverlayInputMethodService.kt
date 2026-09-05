@@ -215,13 +215,7 @@ class OverlayInputMethodService : InputMethodService() {
         DebugLog.log("ime", "input started (restarting=$restarting)")
         val existing = BottomPanelService.instance
         if (existing != null) {
-            // restarting=false means focus genuinely moved to a field, which is a
-            // new session: any "user manually hid the panel" suppression from the
-            // previous one no longer applies. restarting=true is the same field
-            // re-establishing its connection, so the suppression stands.
-            // The editor's package decides whether a session belongs to an app
-            // we handed the bottom screen to, which must not be covered up.
-            existing.expand(freshSession = !restarting, editorPackage = info?.packageName)
+            existing.expand()
         } else {
             // Nothing running on the bottom screen yet — most likely the process
             // was started fresh just to service this focus. Bring the panel up so

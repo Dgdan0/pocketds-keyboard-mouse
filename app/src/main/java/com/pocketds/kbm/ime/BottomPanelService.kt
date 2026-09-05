@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.hardware.display.DisplayManager
 import android.os.Build
@@ -71,6 +72,9 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         private const val CHANNEL_ID = "pocketds_bottom_panel"
         private const val NOTIFICATION_ID = 1
         const val ACTION_REFRESH_THEME = "com.pocketds.kbm.ACTION_REFRESH_THEME"
+
+        /** Long enough for a launch to settle, short enough not to be seen. */
+        private const val WINDOW_SETTLE_MS = 250L
     }
 
     private val defaultImeObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
@@ -136,12 +140,21 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
     }
 
     /**
-     * The app we gave the bottom screen to, or null when the panel owns it.
+     * The app currently using the bottom screen, or null when the panel owns it.
      *
-     * Our panel covers that screen, so anything launched there is behind it.
-     * See [HandoverPolicy] for how the screen comes back.
+     * Our panel covers that screen completely, so anything running there is
+     * behind it. Tracked whoever launched it: reacting only to launches of our
+     * own meant an app opened from the launcher got sat on.
      */
-    private var handedOverTo: String? = null
+    private var bottomScreenOccupant: String? = null
+
+    /**
+     * The user tapped the bubble while something else held the bottom screen,
+     * which is them asking for the keyboard over it. Holds until that app goes
+     * away, so the keyboard then behaves normally rather than needing a tap per
+     * field.
+     */
+    private var userTookScreenBack = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_REFRESH_THEME) {
@@ -165,28 +178,23 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
      *   any manual-hide suppression: hiding the panel applies to the field you
      *   hid it on, not to every field you touch afterwards.
      */
-    fun expand(freshSession: Boolean = false, editorPackage: String? = null) {
-        when (HandoverPolicy.decide(handedOverTo, editorPackage)) {
-            HandoverDecision.SUPPRESS -> {
-                // Deliberately not cleared by freshSession, unlike the manual
-                // hide below: the app we handed the screen to starts its own
-                // input session, which is a fresh session, and clearing here
-                // would cover the app the user just opened.
-                DebugLog.log("panel", "expand suppressed (bottom screen is $handedOverTo's)")
-                return
-            }
-            HandoverDecision.RELEASE_AND_EXPAND -> {
-                DebugLog.log("panel", "focus moved to $editorPackage, taking the bottom screen back")
-                handedOverTo = null
-            }
-            HandoverDecision.EXPAND -> Unit
-        }
-        if (freshSession && manuallyCollapsedThisSession) {
-            DebugLog.log("panel", "new focus session, clearing manual-hide suppression")
-            manuallyCollapsedThisSession = false
-        }
+    fun expand() {
         if (manuallyCollapsedThisSession) {
-            DebugLog.log("panel", "expand suppressed (manually hidden this session)")
+            // Deliberately not cleared by a new focus session any more. It was,
+            // on the reasoning that focusing a new field means you want the
+            // keyboard back -- but hiding it to watch something on the bottom
+            // screen is just as common, and then it climbed back over the app
+            // by itself. Hide means hide; the bubble is one tap away.
+            DebugLog.log("panel", "expand suppressed (hidden by the user)")
+            return
+        }
+        if (bottomScreenOccupant != null && !userTookScreenBack) {
+            // Something else is using that screen. Never climb over it on our
+            // own -- an app opening there almost always focuses a field of its
+            // own, and acting on that buried the app we had just got out of the
+            // way for. The bubble stays on top, so one tap brings the keyboard
+            // over it deliberately.
+            DebugLog.log("panel", "expand suppressed ($bottomScreenOccupant is using the bottom screen)")
             return
         }
         // Three ways a presentation can be useless while still being non-null:
@@ -229,7 +237,6 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
      * justify it — regardless of which mode tab was active before collapsing. */
     fun collapse() {
         DebugLog.log("panel", "collapse")
-        manuallyCollapsedThisSession = false
         panelExpanded = false
         bottomPresentation?.setExpanded(false)
         CursorAccessibilityService.instance?.setCursorAllowed(false)
@@ -330,11 +337,13 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
                 CursorAccessibilityService.instance?.setCursorAllowed(false)
             },
             onExpandRequested = {
-                // Tapping the bubble is the user asking for the keyboard, which
-                // outranks any handover.
-                if (handedOverTo != null) {
-                    DebugLog.log("panel", "bubble tapped, taking the bottom screen back from $handedOverTo")
-                    handedOverTo = null
+                // Tapping the bubble is the user asking for the keyboard, and
+                // it outranks anything else using the screen. The occupant is
+                // deliberately *not* forgotten -- doing that would have the
+                // next window event rediscover it and stand down again.
+                if (bottomScreenOccupant != null) {
+                    DebugLog.log("panel", "bubble tapped, keyboard goes over $bottomScreenOccupant")
+                    userTookScreenBack = true
                 }
                 // Pulled back up from the handle strip. An explicit request like
                 // this also clears the manual-hide suppression — the user asking
@@ -430,6 +439,70 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         return true
     }
 
+    /**
+     * Reacts to another app appearing on, or leaving, the bottom screen.
+     *
+     * The handover used to be set only where we launched something ourselves,
+     * so an app the user opened from the launcher got sat on: the panel covers
+     * that screen completely and had no idea anything was behind it.
+     */
+    fun onBottomScreenWindowsChanged() {
+        // Window events arrive in bursts, and answering each one means walking
+        // the window list across a process boundary.
+        windowChangeHandler.removeCallbacks(bottomScreenCheck)
+        windowChangeHandler.postDelayed(bottomScreenCheck, WINDOW_SETTLE_MS)
+    }
+
+    private val windowChangeHandler = Handler(Looper.getMainLooper())
+    private val bottomScreenCheck = Runnable { checkBottomScreenOccupant() }
+
+    private fun checkBottomScreenOccupant() {
+        val displayId = findSecondaryDisplay()?.displayId ?: return
+        val front = CursorAccessibilityService.instance?.frontmostAppPackage(displayId)
+        val occupant = front.takeIf { BottomScreenOccupancy.isOccupant(it, packageName, homePackages) }
+
+        when (BottomScreenOccupancy.change(was = bottomScreenOccupant, now = occupant)) {
+            OccupancyChange.TAKEN -> {
+                bottomScreenOccupant = occupant
+                userTookScreenBack = false
+                DebugLog.log("panel", "$occupant took the bottom screen, standing down to the bubble")
+                collapse()
+            }
+            OccupancyChange.RELEASED -> {
+                DebugLog.log("panel", "$bottomScreenOccupant left the bottom screen")
+                bottomScreenOccupant = null
+                userTookScreenBack = false
+            }
+            OccupancyChange.UNCHANGED -> Unit
+        }
+    }
+
+    /**
+     * Both launchers: the usual one, and the separate launcher this device runs
+     * for the bottom screen. That second one does not resolve as CATEGORY_HOME,
+     * and since it is always sitting on that display, missing it would read as
+     * an app permanently occupying the screen and stop the keyboard ever
+     * opening.
+     *
+     * Worked out once — querying on every window change would be wasteful, and
+     * launchers do not change under us.
+     */
+    private val homePackages: Set<String> by lazy {
+        listOf(Intent.CATEGORY_HOME, Intent.CATEGORY_SECONDARY_HOME)
+            // Every handler, not just the default one: resolveActivity returns
+            // only the launcher currently in use, and it was the *other* one
+            // sitting on the bottom screen.
+            .flatMap { category ->
+                packageManager.queryIntentActivities(
+                    Intent(Intent.ACTION_MAIN).addCategory(category),
+                    0
+                )
+            }
+            .map { it.activityInfo.packageName }
+            .toSet()
+            .also { DebugLog.log("panel", "launchers on this device: ${it.joinToString()}") }
+    }
+
     /** Focus moved, so whatever was offered for the last field no longer applies. */
     fun clearAutofillSuggestions() {
         bottomPresentation?.panel?.clearAutofillSuggestions()
@@ -447,7 +520,8 @@ class BottomPanelService : Service(), FullKeyboardListener, TrackpadPanel.Listen
         // until we move it was running invisibly behind us. Collapsing to the
         // bubble reveals it and leaves a way back: the bubble floats above it
         // and taps back to the keyboard.
-        handedOverTo = opened
+        bottomScreenOccupant = opened
+        userTookScreenBack = false
         DebugLog.log("panel", "handed the bottom screen to $opened, collapsing to the bubble")
         collapse()
     }

@@ -19,6 +19,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.pocketds.kbm.debug.DebugLog
+import com.pocketds.kbm.ime.BottomPanelService
 import com.pocketds.kbm.settings.CursorSettings
 import com.pocketds.kbm.settings.ThemeSettings
 import kotlin.math.abs
@@ -719,7 +720,13 @@ class CursorAccessibilityService : AccessibilityService() {
      * (the next trackpad touch brings the cursor straight back).
      */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!cursorShown || event == null) return
+        if (event == null) return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ) {
+            BottomPanelService.instance?.onBottomScreenWindowsChanged()
+        }
+        if (!cursorShown) return
         if (!CursorSettings.hideOnScreenTouch(this)) return
         val interactive = when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED,
@@ -736,6 +743,25 @@ class CursorAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
+
+    /**
+     * The frontmost app on [displayId], or null if only our own windows or
+     * nothing at all are there.
+     *
+     * getWindows() covers the default display only, so the bottom screen needs
+     * the all-displays variant.
+     */
+    fun frontmostAppPackage(displayId: Int): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val onDisplay = windowsOnAllDisplays.get(displayId) ?: return null
+        return onDisplay
+            .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            // Topmost first, which is the one the user is looking at.
+            .sortedByDescending { it.layer }
+            .firstNotNullOfOrNull { window ->
+                window.root?.packageName?.toString()?.takeIf { it != packageName }
+            }
+    }
 
     override fun onDestroy() {
         super.onDestroy()

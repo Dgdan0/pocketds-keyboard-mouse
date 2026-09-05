@@ -17,6 +17,18 @@
     <queries>
         <package android:name="com.onepassword.android" />
         <package android:name="com.agilebits.onepassword" />
+
+        <!-- Launchers, so an app sitting on the bottom screen can be told from
+             that screen's own home. This device has a separate launcher for it
+             which declares SECONDARY_HOME. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.SECONDARY_HOME" />
+        </intent>
     </queries>
 
     <application
