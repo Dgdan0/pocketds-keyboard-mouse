@@ -19,7 +19,6 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.pocketds.kbm.debug.DebugLog
-import com.pocketds.kbm.gesture.ReleaseFlick
 import com.pocketds.kbm.ime.BottomPanelService
 import com.pocketds.kbm.settings.CursorSettings
 import com.pocketds.kbm.settings.ThemeSettings
@@ -100,14 +99,6 @@ class CursorAccessibilityService : AccessibilityService() {
      * finger along instead of only moving the pointer. */
     private var dragging = false
 
-    /**
-     * A selection must not coast. Scrolling wants the throw carried through the
-     * release; a drag that flung on lift would run the selection past wherever
-     * the finger actually stopped.
-     */
-    private var suppressFlick = false
-
-    private val flickTracker = ReleaseFlick.Tracker()
     private var scrollFingerDown = false
     private var scrollNeedsReanchor = false
     private var scrollStroke: GestureDescription.StrokeDescription? = null
@@ -142,15 +133,6 @@ class CursorAccessibilityService : AccessibilityService() {
         /** Just long enough to register as a tap, short enough to be unnoticed. */
         private const val CARET_TAP_MS = 40L
         private const val SCROLL_SEGMENT_DURATION_MS = 40L
-        /** How long the finger keeps moving as it lifts. Long enough for the
-         * velocity to be read, short enough not to be felt as extra travel. */
-        private const val FLICK_DURATION_MS = 24L
-        /**
-         * About 3000px/s. The cap was ten times this, near the fastest fling
-         * the platform accepts, and a light flick was reaching the end of a
-         * page and springing back off it.
-         */
-        private const val FLICK_MAX_SPEED_PX_PER_MS = 3f
         // The initial "fingers touch down" stroke — short, since nothing should
         // visibly happen until the first real movement extends it.
         private const val SCROLL_TOUCH_DOWN_MS = 20L
@@ -488,8 +470,6 @@ class CursorAccessibilityService : AccessibilityService() {
         dragging = true
         DebugLog.log("cursor", "drag started, selecting from the cursor")
         beginScrollSession()
-        // After the session starts, which clears it.
-        suppressFlick = true
         pumpScroll()
     }
 
@@ -514,9 +494,6 @@ class CursorAccessibilityService : AccessibilityService() {
         // drag belongs to a dead session now, and its callbacks must not touch
         // the state being set up here.
         scrollGeneration++
-        // Speed from the previous drag would otherwise fling this one on lift.
-        clearSegmentVelocity()
-        suppressFlick = false
         scrollSessionActive = true
         scrollFingerDown = false
         scrollNeedsReanchor = false
@@ -635,12 +612,6 @@ class CursorAccessibilityService : AccessibilityService() {
             return
         }
 
-        flickTracker.add(
-            dx = endX - startX,
-            dy = endY - startY,
-            durationMs = SCROLL_SEGMENT_DURATION_MS,
-            atMs = SystemClock.uptimeMillis()
-        )
 
         scrollX = endX
         scrollY = endY
@@ -706,34 +677,15 @@ class CursorAccessibilityService : AccessibilityService() {
         // zero, and its fling never triggers — which is why scrolling stopped
         // dead the instant you lifted. Letting the app fling is better than
         // simulating decay here: it matches whatever that app already does.
-        val velocity = if (reanchor || suppressFlick) null
-            else flickTracker.velocity(SystemClock.uptimeMillis())
-        val flick = velocity?.let {
-            ReleaseFlick.segment(
-                vx = it.vx,
-                vy = it.vy,
-                flickMs = FLICK_DURATION_MS,
-                maxSpeedPxPerMs = FLICK_MAX_SPEED_PX_PER_MS
-            )
-        }
-        val endPath = Path().apply {
-            moveTo(scrollX, scrollY)
-            if (flick != null) {
-                lineTo(
-                    clamp(scrollX + flick.dx, SCROLL_EDGE_MARGIN_PX, screenWidth - SCROLL_EDGE_MARGIN_PX),
-                    clamp(scrollY + flick.dy, SCROLL_EDGE_MARGIN_PX, screenHeight - SCROLL_EDGE_MARGIN_PX)
-                )
-            }
-        }
-        val end = stroke.continueStroke(endPath, 0, flick?.durationMs ?: 1L, false)
-        // One line per release, so "it stopped dead again" can be answered by
-        // looking rather than by guessing.
-        if (!reanchor) {
-            DebugLog.log(
-                "scroll",
-                if (flick == null) "released flat" else "released with a flick of ${flick.dx}, ${flick.dy}"
-            )
-        }
+        // Deliberately a standing stop. Carrying the finger's speed through the
+        // release does hand the app a velocity to fling on, but in practice it
+        // was worse than the halt it replaced: unpredictable between flicks,
+        // and thrown sideways into the edge of the content often enough to
+        // bounce back off it. Two goes at taming that were still worse than
+        // stopping cleanly, so it stops cleanly.
+        val end = stroke.continueStroke(
+            Path().apply { moveTo(scrollX, scrollY) }, 0, 1L, false
+        )
         if (reanchor) anchorScrollPointer()
 
         scrollDispatchInFlight = true
@@ -761,7 +713,6 @@ class CursorAccessibilityService : AccessibilityService() {
     /** Gesture dispatch fell over — drop the whole drag rather than trying to
      * continue from a stroke the system has already torn down. */
     private fun abandonScroll() {
-        clearSegmentVelocity()
         scrollSessionActive = false
         scrollFingerDown = false
         scrollNeedsReanchor = false
@@ -801,9 +752,6 @@ class CursorAccessibilityService : AccessibilityService() {
     private fun markSyntheticDispatch(durationMs: Long = 0L) {
         lastSyntheticDispatchAt = SystemClock.uptimeMillis() + durationMs
     }
-
-    /** So a new scroll cannot fling on the back of the previous one's speed. */
-    private fun clearSegmentVelocity() = flickTracker.reset()
 
     private fun clamp(value: Float, minVal: Float, maxVal: Float) = max(minVal, min(maxVal, value))
 
