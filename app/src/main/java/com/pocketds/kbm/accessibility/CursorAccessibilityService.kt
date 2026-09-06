@@ -107,9 +107,7 @@ class CursorAccessibilityService : AccessibilityService() {
      */
     private var suppressFlick = false
 
-    private var lastSegmentDx = 0f
-    private var lastSegmentDy = 0f
-    private var lastSegmentAt = 0L
+    private val flickTracker = ReleaseFlick.Tracker()
     private var scrollFingerDown = false
     private var scrollNeedsReanchor = false
     private var scrollStroke: GestureDescription.StrokeDescription? = null
@@ -146,8 +144,13 @@ class CursorAccessibilityService : AccessibilityService() {
         private const val SCROLL_SEGMENT_DURATION_MS = 40L
         /** How long the finger keeps moving as it lifts. Long enough for the
          * velocity to be read, short enough not to be felt as extra travel. */
-        private const val FLICK_DURATION_MS = 40L
-        private const val FLICK_MAX_PX = 400f
+        private const val FLICK_DURATION_MS = 24L
+        /**
+         * About 3000px/s. The cap was ten times this, near the fastest fling
+         * the platform accepts, and a light flick was reaching the end of a
+         * page and springing back off it.
+         */
+        private const val FLICK_MAX_SPEED_PX_PER_MS = 3f
         // The initial "fingers touch down" stroke — short, since nothing should
         // visibly happen until the first real movement extends it.
         private const val SCROLL_TOUCH_DOWN_MS = 20L
@@ -632,9 +635,12 @@ class CursorAccessibilityService : AccessibilityService() {
             return
         }
 
-        lastSegmentDx = endX - startX
-        lastSegmentDy = endY - startY
-        lastSegmentAt = SystemClock.uptimeMillis()
+        flickTracker.add(
+            dx = endX - startX,
+            dy = endY - startY,
+            durationMs = SCROLL_SEGMENT_DURATION_MS,
+            atMs = SystemClock.uptimeMillis()
+        )
 
         scrollX = endX
         scrollY = endY
@@ -700,14 +706,16 @@ class CursorAccessibilityService : AccessibilityService() {
         // zero, and its fling never triggers — which is why scrolling stopped
         // dead the instant you lifted. Letting the app fling is better than
         // simulating decay here: it matches whatever that app already does.
-        val flick = if (reanchor || suppressFlick) null else ReleaseFlick.segment(
-            lastDx = lastSegmentDx,
-            lastDy = lastSegmentDy,
-            segmentMs = SCROLL_SEGMENT_DURATION_MS,
-            ageMs = SystemClock.uptimeMillis() - lastSegmentAt,
-            flickMs = FLICK_DURATION_MS,
-            maxPx = FLICK_MAX_PX
-        )
+        val velocity = if (reanchor || suppressFlick) null
+            else flickTracker.velocity(SystemClock.uptimeMillis())
+        val flick = velocity?.let {
+            ReleaseFlick.segment(
+                vx = it.vx,
+                vy = it.vy,
+                flickMs = FLICK_DURATION_MS,
+                maxSpeedPxPerMs = FLICK_MAX_SPEED_PX_PER_MS
+            )
+        }
         val endPath = Path().apply {
             moveTo(scrollX, scrollY)
             if (flick != null) {
@@ -795,11 +803,7 @@ class CursorAccessibilityService : AccessibilityService() {
     }
 
     /** So a new scroll cannot fling on the back of the previous one's speed. */
-    private fun clearSegmentVelocity() {
-        lastSegmentDx = 0f
-        lastSegmentDy = 0f
-        lastSegmentAt = 0L
-    }
+    private fun clearSegmentVelocity() = flickTracker.reset()
 
     private fun clamp(value: Float, minVal: Float, maxVal: Float) = max(minVal, min(maxVal, value))
 
