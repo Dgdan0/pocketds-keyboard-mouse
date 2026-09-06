@@ -718,6 +718,14 @@ class CursorAccessibilityService : AccessibilityService() {
             }
         }
         val end = stroke.continueStroke(endPath, 0, flick?.durationMs ?: 1L, false)
+        // One line per release, so "it stopped dead again" can be answered by
+        // looking rather than by guessing.
+        if (!reanchor) {
+            DebugLog.log(
+                "scroll",
+                if (flick == null) "released flat" else "released with a flick of ${flick.dx}, ${flick.dy}"
+            )
+        }
         if (reanchor) anchorScrollPointer()
 
         scrollDispatchInFlight = true
